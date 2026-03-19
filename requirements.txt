@@ -1,0 +1,6 @@
+streamlit
+rdkit
+py3dmol
+qiskit
+qiskit-nature
+matplotlib
