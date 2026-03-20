@@ -20,7 +20,8 @@ import numpy as np
 import math
 import re
 from typing import Dict, List, Tuple
-from modules.quantum_simulation import run_vqe_simulation
+from rdkit import Chem
+from modules.quantum_simulation import run_vqe_simulation, run_classical_simulation
 from modules.quantum_ml import get_catalyst_properties
 from modules.molecule_validator import process_molecule_input
 
@@ -126,6 +127,43 @@ def _parse_reaction_term(term: str) -> Tuple[int, str]:
     return 1, cleaned
 
 
+def _heuristic_species_energy(smiles: str) -> float:
+    """Estimate baseline energy with an atom-counting fallback heuristic."""
+    mol = Chem.MolFromSmiles(smiles)
+    if mol is None:
+        return -50.0
+
+    heavy_atoms = sum(1 for atom in mol.GetAtoms() if atom.GetAtomicNum() > 1)
+    hydrogens = sum(atom.GetTotalNumHs(includeNeighbors=True) for atom in mol.GetAtoms())
+    return float(-37.0 * heavy_atoms - 0.5 * hydrogens)
+
+
+def _estimate_species_energy(smiles: str) -> float:
+    """Get chemically sane baseline energy for arbitrary species."""
+    base_energies = {
+        "[H][H]": -1.137,
+        "O=O": -149.6,
+        "N#N": -108.9,
+        "O": -76.0,
+        "N": -56.2,
+        "O=C=O": -188.0,
+        "[C-]#[O+]": -112.8,
+        "CO": -112.8,
+    }
+
+    if smiles in base_energies:
+        return float(base_energies[smiles])
+
+    try:
+        hf = run_classical_simulation(smiles)
+        if not hf.get("error") and np.isfinite(float(hf.get("energy", np.nan))):
+            return float(hf["energy"])
+    except Exception:
+        pass
+
+    return _heuristic_species_energy(smiles)
+
+
 def parse_dynamic_reaction(equation: str) -> Dict:
     """
     Parse a user reaction equation into validated internal pathway format.
@@ -163,15 +201,15 @@ def parse_dynamic_reaction(equation: str) -> Dict:
     except Exception as exc:
         return {"error": f"Failed to parse reaction equation: {exc}"}
 
-    # Fast baseline enthalpy estimate from HF fallback energies.
+    # Fast baseline enthalpy estimate using known energies + HF + heuristic fallback.
     reactant_e = 0.0
     product_e = 0.0
     for s in reactants:
-        r = run_vqe_simulation(s, method="HF")
-        reactant_e += float(r.get("energy", 0.0))
+        reactant_e += _estimate_species_energy(s)
     for s in products:
-        r = run_vqe_simulation(s, method="HF")
-        product_e += float(r.get("energy", 0.0))
+        product_e += _estimate_species_energy(s)
+
+    reaction_enthalpy = float(product_e - reactant_e)
 
     reaction_type = _infer_reaction_type(reactants, products)
 
@@ -183,7 +221,8 @@ def parse_dynamic_reaction(equation: str) -> Dict:
         "type": reaction_type,
         "ideal_catalysts": ["[Pt]", "[Fe]", "[Cu]"],
         "activation_energy_uncatalyzed": 2.8,
-        "estimated_reaction_enthalpy": float(product_e - reactant_e),
+        "estimated_reaction_enthalpy": reaction_enthalpy,
+        "reaction_enthalpy": reaction_enthalpy,
         "error": "",
     }
 

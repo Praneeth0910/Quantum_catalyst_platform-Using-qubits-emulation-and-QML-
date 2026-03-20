@@ -21,8 +21,8 @@ Key Algorithms:
 """
 
 import numpy as np
+import random
 from qiskit import QuantumCircuit
-from qiskit.circuit import ParameterVector
 from qiskit.circuit.library import ZZFeatureMap, RealAmplitudes
 from qiskit_algorithms import VQE
 from qiskit_algorithms.optimizers import COBYLA, SPSA, SLSQP
@@ -204,6 +204,8 @@ class QuantumCatalystScorer:
             labels: 1 = good catalyst, -1 = poor catalyst
         """
         # Training data based on known catalyst performance
+        reaction_hint = (self.reaction_type or "").lower()
+
         if self.reaction_type == "H2_O2":
             # H2 + O2 -> H2O reaction
             good_catalysts = ["[Pt]", "[Pd]", "[Ni]=O", "[Fe]=O"]
@@ -218,6 +220,16 @@ class QuantumCatalystScorer:
             # CO2 -> CO/CH4
             good_catalysts = ["[Cu]", "[Ag]", "[Au]", "[Pd]"]
             poor_catalysts = ["[Fe]", "[Ni]", "[Zn]"]
+
+        elif ("o2" in reaction_hint) or ("o=" in reaction_hint):
+            # Dynamic oxidation-like custom reaction pool.
+            good_catalysts = ["[Pt]", "[Pd]", "[Ni]=O", "[Fe]=O"]
+            poor_catalysts = ["[Au]", "[Ag]", "[Cu]", "[Zn]"]
+
+        elif ("h2" in reaction_hint) or ("n2" in reaction_hint):
+            # Dynamic reduction/hydrogenation custom reaction pool.
+            good_catalysts = ["[Fe]", "[Ru]", "[Ni]", "[Co]"]
+            poor_catalysts = ["[Au]", "[Ag]", "[Zn]"]
 
         else:
             # Default generic training
@@ -507,9 +519,6 @@ class CatalystGenerator:
         """
         self.target_reaction = target_reaction
         self.num_qubits = 8
-        self.theta_1 = ParameterVector("theta_1", self.num_qubits)
-        self.theta_2 = ParameterVector("theta_2", self.num_qubits)
-        self.theta_3 = ParameterVector("theta_3", self.num_qubits)
         self.generator = self._build_generator()
 
     def _build_generator(self) -> QuantumCircuit:
@@ -520,10 +529,10 @@ class CatalystGenerator:
         """
         qc = QuantumCircuit(self.num_qubits)
 
-        # Parameterized circuit (generator)
+        # Stochastic latent-space initialization (QGAN-style exploration).
         for i in range(self.num_qubits):
-            qc.ry(self.theta_1[i], i)
-            qc.rz(self.theta_2[i], i)
+            qc.ry(random.uniform(0.0, 2 * np.pi), i)
+            qc.rz(random.uniform(0.0, 2 * np.pi), i)
 
         # Entanglement
         for i in range(self.num_qubits - 1):
@@ -531,7 +540,7 @@ class CatalystGenerator:
 
         # More parameterization
         for i in range(self.num_qubits):
-            qc.ry(self.theta_3[i], i)
+            qc.ry(random.uniform(0.0, 2 * np.pi), i)
 
         return qc
 
@@ -546,23 +555,19 @@ class CatalystGenerator:
         return action_map.get(bitstring[:2], "metal_swap")
 
     def _sample_quantum_actions(self, num_actions: int) -> List[str]:
-        """Generate mutation actions from statevector probabilities."""
-        param_values = {}
-        for i in range(self.num_qubits):
-            # Deterministic but reaction-dependent parameterization.
-            seed_value = (hash((self.target_reaction, i)) % 10_000) / 10_000.0
-            param_values[self.theta_1[i]] = 2 * np.pi * seed_value
-            param_values[self.theta_2[i]] = 2 * np.pi * ((seed_value * 1.7) % 1.0)
-            param_values[self.theta_3[i]] = 2 * np.pi * ((seed_value * 2.3) % 1.0)
-
-        bound = self.generator.assign_parameters(param_values)
-        state = Statevector(bound)
+        """Generate mutation actions by probabilistic statevector sampling."""
+        state = Statevector(self.generator)
         probabilities = state.probabilities_dict()
 
-        # Use highest-probability outcomes for deterministic action selection.
-        top_bitstrings = sorted(probabilities.items(), key=lambda kv: kv[1], reverse=True)
-        selected = [bits for bits, _ in top_bitstrings[:max(1, num_actions)]]
-        return [self._bitstring_to_action(bits) for bits in selected]
+        bitstrings = list(probabilities.keys())
+        probs = np.array(list(probabilities.values()), dtype=float)
+        if probs.sum() <= 0:
+            probs = np.ones(len(bitstrings), dtype=float) / max(1, len(bitstrings))
+        else:
+            probs = probs / probs.sum()
+
+        sampled = np.random.choice(bitstrings, size=max(1, num_actions), p=probs, replace=True)
+        return [self._bitstring_to_action(bits) for bits in sampled.tolist()]
 
     def generate_candidates(self, num_candidates: int = 5) -> List[Dict]:
         """
@@ -583,19 +588,31 @@ class CatalystGenerator:
         }
         base_catalyst = reaction_bases.get(self.target_reaction, "[Pd]")
 
-        action_sequence = self._sample_quantum_actions(max(6, num_candidates * 2))
+        action_sequence = self._sample_quantum_actions(max(8, num_candidates * 4))
 
         generated_smiles: List[str] = []
         seen = set()
         for action in action_sequence:
-            for smiles in mutate_catalyst(base_catalyst, num_variations=3, mutation_mode=action):
+            for smiles in mutate_catalyst(base_catalyst, num_variations=4, mutation_mode=action):
                 if smiles not in seen:
                     seen.add(smiles)
                     generated_smiles.append(smiles)
-                if len(generated_smiles) >= max(6, num_candidates * 2):
+                if len(generated_smiles) >= max(8, num_candidates * 4):
                     break
-            if len(generated_smiles) >= max(6, num_candidates * 2):
+            if len(generated_smiles) >= max(8, num_candidates * 4):
                 break
+
+        # Backstop: if stochastic draws under-sample action diversity, sweep all modes.
+        if len(generated_smiles) < num_candidates:
+            for action in ["metal_swap", "ligand_oxo", "ligand_hydroxyl", "ligand_methyl", "doping"]:
+                for smiles in mutate_catalyst(base_catalyst, num_variations=6, mutation_mode=action):
+                    if smiles not in seen:
+                        seen.add(smiles)
+                        generated_smiles.append(smiles)
+                    if len(generated_smiles) >= max(8, num_candidates * 4):
+                        break
+                if len(generated_smiles) >= max(8, num_candidates * 4):
+                    break
 
         if not generated_smiles:
             generated_smiles = [base_catalyst]

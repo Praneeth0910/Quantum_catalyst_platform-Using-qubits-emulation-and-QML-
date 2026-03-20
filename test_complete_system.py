@@ -11,9 +11,27 @@ Tests all new modules:
 """
 
 import sys
+import math
 print("=" * 70)
 print("QUANTUM CATALYST PLATFORM - COMPREHENSIVE TEST SUITE")
 print("=" * 70)
+
+
+def test_custom_reaction_thermodynamics():
+    """Validate that custom reaction parsing returns a sane finite enthalpy."""
+    from modules.reaction_pathway import parse_dynamic_reaction
+
+    parsed = parse_dynamic_reaction("C2H4 + H2O -> C2H5OH")
+    if parsed.get("error"):
+        raise AssertionError(f"Custom reaction parse failed: {parsed['error']}")
+
+    enthalpy = parsed.get("reaction_enthalpy", parsed.get("estimated_reaction_enthalpy"))
+    if not isinstance(enthalpy, (int, float)):
+        raise AssertionError(f"reaction_enthalpy is not numeric: {type(enthalpy).__name__}")
+    if not math.isfinite(float(enthalpy)):
+        raise AssertionError("reaction_enthalpy is not finite")
+
+    print(f"[OK] Custom reaction enthalpy is finite: {float(enthalpy):.6f} Ha")
 
 # Test 1: Hamiltonian Database
 print("\n[TEST 1/6] Hamiltonian Database")
@@ -127,6 +145,17 @@ try:
     else:
         print("[ERROR] No candidates generated")
 
+    # Strict stochastic uniqueness validation for AI Discovery pipeline
+    stochastic_candidates = discover_catalysts("H2_O2", num_candidates=5)
+    unique_smiles = {cand["smiles"] for cand in stochastic_candidates}
+    if len(stochastic_candidates) != 5:
+        raise AssertionError(f"Expected 5 candidates, got {len(stochastic_candidates)}")
+    if len(unique_smiles) != 5:
+        raise AssertionError(
+            f"Expected 5 unique SMILES from stochastic sampling, got {len(unique_smiles)}"
+        )
+    print("[OK] Stochastic discovery produced 5 unique candidate SMILES")
+
     # Test user scoring
     print("\nTesting user catalyst scoring...")
     user_score = score_user_catalyst("[Fe]", "[Pt]", "H2_O2")
@@ -148,6 +177,16 @@ try:
     else:
         print("[FAIL] Feature extraction sanity check failed")
 
+except Exception as e:
+    print(f"[ERROR] {e}")
+    import traceback
+    traceback.print_exc()
+
+# Test 7: Dynamic custom reaction thermodynamics
+print("\n[TEST 7/7] Custom Reaction Thermodynamics")
+print("-" * 70)
+try:
+    test_custom_reaction_thermodynamics()
 except Exception as e:
     print(f"[ERROR] {e}")
     import traceback
