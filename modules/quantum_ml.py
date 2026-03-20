@@ -28,10 +28,13 @@ from qiskit_algorithms.optimizers import COBYLA, SPSA, SLSQP
 from qiskit.primitives import StatevectorSampler, StatevectorEstimator
 from typing import Dict, List, Tuple, Optional
 from rdkit import Chem
-from rdkit.Chem import Descriptors
+from rdkit.Chem import Descriptors, AllChem
 import random
+from modules.molecule_generation import generate_catalyst_candidates
 
 # NOTE: qiskit_machine_learning is optional - we implement core functionality without it
+
+FEATURE_DIMENSION = 16
 
 
 # ========================================================================
@@ -42,29 +45,24 @@ def extract_molecular_features(smiles: str) -> np.ndarray:
     """
     Extract numerical features from a molecule for ML algorithms.
 
-    Features extracted:
-    1. Molecular weight
-    2. Number of heavy atoms
-    3. Number of heteroatoms
-    4. Number of rotatable bonds
-    5. LogP (lipophilicity)
-    6. TPSA (topological polar surface area)
-    7. Number of aromatic atoms
-    8. Number of valence electrons
+    Features extracted (16D):
+    - 8 physicochemical descriptors
+    - 4 Coulomb-like matrix spectrum descriptors
+    - 4 Morgan fingerprint block-density descriptors
 
     Args:
         smiles: SMILES string
 
     Returns:
-        8D feature vector (normalized to [0, 1])
+        16D feature vector (normalized to [0, 1])
     """
     try:
         mol = Chem.MolFromSmiles(smiles)
         if mol is None:
-            return np.zeros(8)
+            return np.zeros(FEATURE_DIMENSION)
 
-        # Extract raw features
-        features = np.array([
+        # 8D physicochemical descriptor block
+        physchem = np.array([
             Descriptors.MolWt(mol),                    # Molecular weight
             mol.GetNumHeavyAtoms(),                     # Heavy atoms
             sum(1 for atom in mol.GetAtoms() if atom.GetAtomicNum() not in [1, 6]),  # Heteroatoms
@@ -78,12 +76,45 @@ def extract_molecular_features(smiles: str) -> np.ndarray:
         # Normalize to [0, 1] range
         # Use domain knowledge for scaling
         scales = np.array([200.0, 10.0, 5.0, 5.0, 5.0, 150.0, 10.0, 50.0])
-        features = np.clip(features / scales, 0, 1)
+        physchem = np.clip(physchem / scales, 0, 1)
 
-        return features
+        # 4D Coulomb-like spectrum block from graph-distance approximation
+        atoms = [atom.GetAtomicNum() for atom in mol.GetAtoms()]
+        n = len(atoms)
+        if n == 0:
+            coulomb_features = np.zeros(4)
+        else:
+            dist_matrix = Chem.GetDistanceMatrix(mol)
+            cmat = np.zeros((n, n), dtype=float)
+            for i in range(n):
+                zi = atoms[i]
+                for j in range(n):
+                    zj = atoms[j]
+                    if i == j:
+                        cmat[i, j] = 0.5 * (zi ** 2.4)
+                    else:
+                        cmat[i, j] = (zi * zj) / max(1.0, float(dist_matrix[i, j]))
+
+            eigvals = np.sort(np.abs(np.linalg.eigvals(cmat).real))[::-1]
+            coulomb_features = np.zeros(4)
+            take = min(4, len(eigvals))
+            coulomb_features[:take] = eigvals[:take]
+            coulomb_features = np.clip(coulomb_features / np.array([500, 200, 100, 50], dtype=float), 0, 1)
+
+        # 4D Morgan fingerprint density block
+        fp = AllChem.GetMorganFingerprintAsBitVect(mol, radius=2, nBits=128)
+        fp_arr = np.array(list(fp), dtype=float)
+        block_size = 32
+        fp_features = np.array([
+            np.mean(fp_arr[i * block_size:(i + 1) * block_size])
+            for i in range(4)
+        ], dtype=float)
+
+        features = np.concatenate([physchem, coulomb_features, fp_features])
+        return np.clip(features, 0, 1)
 
     except Exception:
-        return np.zeros(8)
+        return np.zeros(FEATURE_DIMENSION)
 
 
 def get_catalyst_properties(smiles: str) -> Dict:
@@ -136,7 +167,7 @@ class QuantumCatalystScorer:
             reaction_type: Type of reaction (e.g., "H2_O2", "CO2_reduction")
         """
         self.reaction_type = reaction_type
-        self.feature_map = ZZFeatureMap(feature_dimension=8, reps=2)
+        self.feature_map = ZZFeatureMap(feature_dimension=FEATURE_DIMENSION, reps=2)
         self.trained = False
         self.training_data = self._get_training_data()
 
@@ -325,7 +356,7 @@ class VariationalCatalystClassifier:
     """
 
     def __init__(self):
-        self.num_features = 8
+        self.num_features = FEATURE_DIMENSION
         self.feature_map = ZZFeatureMap(self.num_features, reps=1)
         self.ansatz = RealAmplitudes(self.num_features, reps=3)
         self.trained = False
@@ -412,7 +443,7 @@ class CatalystGenerator:
             target_reaction: Target reaction type
         """
         self.target_reaction = target_reaction
-        self.num_qubits = 4  # For 8 features (2 features per qubit)
+        self.num_qubits = 4
         self.generator = self._build_generator()
 
     def _build_generator(self) -> QuantumCircuit:
@@ -451,18 +482,11 @@ class CatalystGenerator:
         """
         candidates = []
 
-        # Known good catalysts pool
-        catalyst_pool = {
-            "H2_O2": ["[Pt]", "[Pd]", "[Ni]=O", "[Rh]", "[Ru]"],
-            "N2_H2": ["[Fe]", "[Ru]", "[Fe]=O", "[Co]", "[Ni]"],
-            "CO2_reduction": ["[Cu]", "[Ag]", "[Au]", "[Pd]", "[Ni]"],
-        }
-
-        pool = catalyst_pool.get(self.target_reaction, ["[Pt]", "[Pd]", "[Fe]", "[Ni]", "[Cu]"])
+        pool = generate_catalyst_candidates(self.target_reaction, num_candidates=max(6, num_candidates * 2))
 
         # Generate candidates (in a full QGAN, this would sample from quantum state)
         for i in range(num_candidates):
-            # Select from pool with some randomness
+            # Select generated candidates (QGAN-inspired sampling proxy)
             base_catalyst = random.choice(pool)
 
             features = extract_molecular_features(base_catalyst)
@@ -472,7 +496,7 @@ class CatalystGenerator:
                 "smiles": base_catalyst,
                 "features": features.tolist(),
                 "metal_type": props.get("metal_type"),
-                "generation_score": random.uniform(0.7, 0.95),  # Simulated quality score
+                "generation_score": float(0.65 + 0.3 * np.mean(features)),
                 "method": "QGAN Generation"
             })
 
@@ -508,7 +532,8 @@ def score_user_catalyst(user_smiles: str, ideal_smiles: str, reaction_type: str)
     # Compare features
     user_features = extract_molecular_features(user_smiles)
     ideal_features = extract_molecular_features(ideal_smiles)
-    feature_similarity = float(1.0 - np.linalg.norm(user_features - ideal_features) / np.sqrt(8))
+    feature_similarity = float(1.0 - np.linalg.norm(user_features - ideal_features) / np.sqrt(FEATURE_DIMENSION))
+    feature_similarity = float(np.clip(feature_similarity, 0.0, 1.0))
 
     # Overall score
     overall_score = (qsvm_result["score"] * 0.6 + feature_similarity * 40)
