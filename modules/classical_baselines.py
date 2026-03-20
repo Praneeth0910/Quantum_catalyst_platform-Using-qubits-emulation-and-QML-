@@ -318,6 +318,7 @@ def compare_quantum_vs_classical_chemistry(smiles: str) -> Dict:
 
     hf_diff = abs(vqe_energy - hf_energy)
     dft_diff = abs(vqe_energy - dft_energy)
+    correlation_energy = float(vqe_energy - hf_energy)
 
     # VQE is typically more accurate (lower energy)
     vqe_advantage = {
@@ -338,6 +339,7 @@ def compare_quantum_vs_classical_chemistry(smiles: str) -> Dict:
         "vqe": vqe_result,
         "hf": hf_result,
         "dft": dft_result,
+        "correlation_energy": correlation_energy,
         "comparison": vqe_advantage,
         "summary": {
             "most_accurate": "VQE" if vqe_energy < min(hf_energy, dft_energy) else "DFT",

@@ -42,6 +42,7 @@ from modules.classical_baselines import (
     compare_quantum_vs_classical_ml,
     run_full_comparison
 )
+from modules.export_utils import export_discovery_batch_to_csv
 
 # ========================================================================
 # PAGE CONFIGURATION
@@ -105,6 +106,9 @@ if 'results_history' not in st.session_state:
 
 if 'current_page' not in st.session_state:
     st.session_state.current_page = "Home"
+
+if 'discovered_catalysts' not in st.session_state:
+    st.session_state.discovered_catalysts = []
 
 # ========================================================================
 # SIDEBAR NAVIGATION
@@ -270,6 +274,29 @@ def _map_custom_reaction_to_qml_key(parsed_reaction: dict) -> str:
     if reaction_type == "oxidation":
         return "H2_O2"
     return "CO2_reduction"
+
+
+def catalyst_input_widget(label: str, key_prefix: str, placeholder: str = "e.g., Pt, Fe, NiO") -> str:
+    """Render catalyst input as discovered-candidate select + custom entry."""
+    discovered = st.session_state.get("discovered_catalysts", [])
+    if discovered:
+        mode = st.selectbox(
+            f"{label} Input Mode:",
+            options=["Select Discovered Catalyst", "Type Custom SMILES"],
+            key=f"{key_prefix}_mode",
+        )
+        if mode == "Select Discovered Catalyst":
+            return st.selectbox(
+                label,
+                options=discovered,
+                key=f"{key_prefix}_selected",
+            )
+
+    return st.text_input(
+        label,
+        placeholder=placeholder,
+        key=f"{key_prefix}_custom",
+    )
 
 # ========================================================================
 # PAGE: HOME
@@ -453,7 +480,7 @@ elif page == "🔬 Feature 1: AI Discovery":
 
     if discover_btn:
         st.info("Generating novel catalytic structures via RDKit mutation engine...")
-        with st.spinner("🧬 Quantum AI is generating candidates..."):
+        with st.spinner("🧬 Sampling Statevector probabilities and generating stochastic catalyst mutations..."):
             if selected_reaction == "CUSTOM":
                 parsed_custom_reaction = parse_dynamic_reaction(custom_reaction_equation) if custom_reaction_equation else {"error": "Please enter a custom reaction equation."}
                 if parsed_custom_reaction.get("error"):
@@ -471,6 +498,13 @@ elif page == "🔬 Feature 1: AI Discovery":
 
             if candidates:
                 st.success(f"✅ Generated {len(candidates)} catalyst candidates!")
+
+                # Persist discovered catalysts across tabs for pipeline flow.
+                discovered = st.session_state.discovered_catalysts
+                for cand in candidates:
+                    smiles = cand.get('smiles')
+                    if smiles and smiles not in discovered:
+                        discovered.append(smiles)
 
                 # Display candidates
                 st.markdown("### 📋 Catalyst Candidates")
@@ -554,6 +588,14 @@ elif page == "🔬 Feature 1: AI Discovery":
                 st.pyplot(fig_comp)
                 plt.close()
 
+                csv_report = export_discovery_batch_to_csv(candidates)
+                st.download_button(
+                    label="📥 Download Catalyst Discovery Report (CSV)",
+                    data=csv_report,
+                    file_name="quantum_discovery_report.csv",
+                    mime="text/csv",
+                )
+
                 # Save to history
                 save_result_to_history({
                     'type': 'AI Discovery',
@@ -615,9 +657,10 @@ elif page == "🎮 Feature 2: Learning Game":
             st.warning(f"💡 Ideal catalysts: {', '.join(reaction_data['ideal_catalysts'])}")
 
     with col2:
-        user_catalyst = st.text_input(
+        user_catalyst = catalyst_input_widget(
             "Your Catalyst Guess:",
-            placeholder="e.g., Pt, Fe, NiO, iron, platinum"
+            key_prefix="learning",
+            placeholder="e.g., Pt, Fe, NiO, iron, platinum",
         )
 
         st.caption("Enter: element name, formula, or SMILES")
@@ -791,10 +834,10 @@ elif page == "📊 Quantum vs Classical":
     )
 
     # Molecule/Catalyst input
-    test_molecule = st.text_input(
+    test_molecule = catalyst_input_widget(
         "Enter Molecule/Catalyst:",
-        value="[Pt]",
-        placeholder="e.g., H2, H2O, Pt, Fe"
+        key_prefix="comparison",
+        placeholder="e.g., H2, H2O, Pt, Fe",
     )
 
     if comparison_type in ["Machine Learning (QSVM vs Classical ML)", "Full Comparison"]:
@@ -856,6 +899,17 @@ elif page == "📊 Quantum vs Classical":
                         # Quantum advantage analysis
                         st.markdown("#### 🎯 Quantum Advantage Analysis")
                         comparison = chem_comp['comparison']
+                        correlation_energy = chem_comp['correlation_energy']
+
+                        st.metric(
+                            label="Electron Correlation Energy Captured",
+                            value=f"{correlation_energy:.4f} Ha"
+                        )
+                        st.info(
+                            "Hartree-Fock (Classical) ignores electron-electron correlation. "
+                            "The VQE (Quantum) captures this correlation, which is critical for "
+                            "accurate catalyst binding energies."
+                        )
 
                         adv_col1, adv_col2 = st.columns(2)
 

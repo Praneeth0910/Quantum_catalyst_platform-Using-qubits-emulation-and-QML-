@@ -81,6 +81,27 @@ def create_pdf_report(results: Dict, filename: str = None) -> str:
     return filename
 
 
+def export_discovery_batch_to_csv(candidates: list) -> str:
+    """
+    Export discovery candidates to CSV string.
+
+    Fields:
+    - SMILES
+    - QSVM Score
+    - Classification
+    """
+    rows = []
+    for cand in candidates or []:
+        rows.append({
+            "SMILES": cand.get("smiles", ""),
+            "QSVM Score": cand.get("catalyst_score", ""),
+            "Classification": cand.get("classification", ""),
+        })
+
+    df = pd.DataFrame(rows, columns=["SMILES", "QSVM Score", "Classification"])
+    return df.to_csv(index=False)
+
+
 def _add_discovery_pages(pdf: PdfPages, results: Dict):
     """Add AI discovery result pages to PDF."""
     candidates = results.get('candidates', [])
