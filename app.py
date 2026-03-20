@@ -8,7 +8,7 @@ A comprehensive platform for quantum-powered catalyst discovery using:
 - Classical algorithm comparisons
 - Interactive educational tools
 
-Author: Built with Claude Code
+Author: Baratam Pranneth Gupta
 Date: March 2026
 """
 

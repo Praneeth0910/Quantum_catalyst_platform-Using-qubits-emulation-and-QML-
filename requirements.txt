@@ -2,5 +2,9 @@ streamlit
 rdkit
 py3dmol
 qiskit
+qiskit-algorithms
 qiskit-nature
 matplotlib
+numpy
+pandas
+scikit-learn
