@@ -37,6 +37,39 @@ from modules.molecule_generation import generate_catalyst_candidates
 FEATURE_DIMENSION = 16
 
 
+def _is_degenerate_feature_vector(features: np.ndarray, tol: float = 1e-12) -> bool:
+    """Return True if features carry effectively no signal."""
+    return bool(np.all(np.abs(features) <= tol))
+
+
+def _validate_feature_vector(features: np.ndarray) -> Tuple[bool, str]:
+    """
+    Validate shape and numerical quality of a molecular feature vector.
+
+    Returns:
+        (is_valid, reason)
+    """
+    if features is None:
+        return False, "feature vector is None"
+
+    if not isinstance(features, np.ndarray):
+        return False, f"feature vector must be numpy.ndarray, got {type(features).__name__}"
+
+    if features.ndim != 1:
+        return False, f"feature vector must be 1D, got {features.ndim}D"
+
+    if len(features) != FEATURE_DIMENSION:
+        return False, f"expected {FEATURE_DIMENSION} features, got {len(features)}"
+
+    if not np.all(np.isfinite(features)):
+        return False, "feature vector contains non-finite values"
+
+    if _is_degenerate_feature_vector(features):
+        return False, "feature vector is degenerate (all near zero)"
+
+    return True, ""
+
+
 # ========================================================================
 # MOLECULAR FEATURE EXTRACTION
 # ========================================================================
@@ -231,6 +264,11 @@ class QuantumCatalystScorer:
         Uses quantum feature map overlap |<ψ(x1)|ψ(x2)>|²
         """
         try:
+            valid_x1, _ = _validate_feature_vector(x1)
+            valid_x2, _ = _validate_feature_vector(x2)
+            if not valid_x1 or not valid_x2:
+                return 0.0
+
             # Create feature map circuits
             qc1 = self.feature_map.assign_parameters(x1)
             qc2 = self.feature_map.assign_parameters(x2)
@@ -263,10 +301,40 @@ class QuantumCatalystScorer:
 
         try:
             features = extract_molecular_features(smiles)
+            is_valid, reason = _validate_feature_vector(features)
+            if not is_valid:
+                return {
+                    "score": 0,
+                    "classification": "error",
+                    "confidence": 0,
+                    "feedback": f"Feature extraction failed for {smiles}: {reason}.",
+                    "method": "QSVM (Quantum Kernel)",
+                    "error": reason
+                }
+
+            if not hasattr(self, "X_train") or not hasattr(self, "y_train"):
+                return {
+                    "score": 0,
+                    "classification": "error",
+                    "confidence": 0,
+                    "feedback": "Model training data unavailable.",
+                    "method": "QSVM (Quantum Kernel)",
+                    "error": "missing training state"
+                }
 
             # Calculate similarities to training examples
             good_indices = np.where(self.y_train == 1)[0]
             poor_indices = np.where(self.y_train == -1)[0]
+
+            if len(good_indices) == 0 or len(poor_indices) == 0:
+                return {
+                    "score": 0,
+                    "classification": "error",
+                    "confidence": 0,
+                    "feedback": "Training data is incomplete for this reaction class.",
+                    "method": "QSVM (Quantum Kernel)",
+                    "error": "invalid class split"
+                }
 
             # Average similarity to good catalysts
             good_sim = np.mean([
@@ -390,12 +458,21 @@ class VariationalCatalystClassifier:
             Dictionary with classification results
         """
         features = extract_molecular_features(smiles)
+        is_valid_features, reason = _validate_feature_vector(features)
         props = get_catalyst_properties(smiles)
 
         # Simplified classification logic
         # In a full implementation, this would use the trained VQC
         if not props["valid"]:
             return {"category": "invalid", "confidence": 0, "error": "Invalid molecule"}
+
+        if not is_valid_features:
+            return {
+                "category": "invalid_features",
+                "confidence": 0,
+                "method": "VQC (Variational Quantum Classifier)",
+                "error": reason
+            }
 
         if props["is_metal"]:
             metal = props["metal_type"]
@@ -532,8 +609,33 @@ def score_user_catalyst(user_smiles: str, ideal_smiles: str, reaction_type: str)
     # Compare features
     user_features = extract_molecular_features(user_smiles)
     ideal_features = extract_molecular_features(ideal_smiles)
-    feature_similarity = float(1.0 - np.linalg.norm(user_features - ideal_features) / np.sqrt(FEATURE_DIMENSION))
-    feature_similarity = float(np.clip(feature_similarity, 0.0, 1.0))
+
+    user_valid, user_reason = _validate_feature_vector(user_features)
+    if not user_valid:
+        return {
+            "overall_score": 0,
+            "qsvm_score": 0,
+            "qsvm_feedback": f"Feature extraction failed for user catalyst: {user_reason}",
+            "vqc_category": "invalid_features",
+            "feature_similarity": 0,
+            "classification": "error",
+            "error": user_reason
+        }
+
+    ideal_valid, ideal_reason = _validate_feature_vector(ideal_features)
+    if not ideal_valid:
+        return {
+            "overall_score": 0,
+            "qsvm_score": qsvm_result.get("score", 0),
+            "qsvm_feedback": "Ideal catalyst reference features are invalid.",
+            "vqc_category": "invalid_features",
+            "feature_similarity": 0,
+            "classification": "error",
+            "error": ideal_reason
+        }
+
+    distance = np.linalg.norm(user_features - ideal_features)
+    feature_similarity = float(np.clip(1.0 - distance / np.sqrt(FEATURE_DIMENSION), 0.0, 1.0))
 
     # Overall score
     overall_score = (qsvm_result["score"] * 0.6 + feature_similarity * 40)

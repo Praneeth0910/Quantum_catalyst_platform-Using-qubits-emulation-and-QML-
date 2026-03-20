@@ -99,7 +99,8 @@ try:
     from modules.quantum_ml import (
         QuantumCatalystScorer,
         discover_catalysts,
-        score_user_catalyst
+        score_user_catalyst,
+        extract_molecular_features
     )
 
     # Test QSVM scoring
@@ -132,6 +133,20 @@ try:
     print(f"[OK] User catalyst ([Fe]) vs Ideal ([Pt])")
     print(f"[OK] Overall score: {user_score['overall_score']:.2f}/100")
     print(f"[OK] QSVM score: {user_score['qsvm_score']:.2f}")
+
+    # Guardrail test: invalid user catalyst should fail explicitly
+    invalid_user_score = score_user_catalyst("XYZ123", "[Pt]", "H2_O2")
+    if invalid_user_score.get("error"):
+        print(f"[OK] Invalid catalyst guardrail triggered: {invalid_user_score['error']}")
+    else:
+        print("[FAIL] Invalid catalyst guardrail did not trigger")
+
+    # Guardrail sanity: known valid catalyst should produce non-degenerate features
+    valid_features = extract_molecular_features("[Pt]")
+    if len(valid_features) == 16 and valid_features.sum() > 0:
+        print("[OK] Feature extraction sanity check passed")
+    else:
+        print("[FAIL] Feature extraction sanity check failed")
 
 except Exception as e:
     print(f"[ERROR] {e}")

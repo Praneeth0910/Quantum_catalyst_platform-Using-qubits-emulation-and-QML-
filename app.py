@@ -224,6 +224,15 @@ def save_result_to_history(result_data):
     result_data['timestamp'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     st.session_state.results_history.append(result_data)
 
+
+def show_simulation_provenance(sim_result: dict):
+    """Display Hamiltonian provenance for VQE/HF results when available."""
+    source = sim_result.get("hamiltonian_source")
+    if source == "approximate_fallback":
+        st.warning("Using approximate fallback Hamiltonian for an unsupported molecule. Interpret results as exploratory.")
+    elif source == "database":
+        st.caption("Hamiltonian source: curated static database")
+
 # ========================================================================
 # PAGE: HOME
 # ========================================================================
@@ -339,7 +348,7 @@ if page == "🏠 Home":
         **Machine Learning:**
         - **Qiskit ML**: Quantum machine learning algorithms
         - **Scikit-learn**: Classical ML baselines
-        - **Feature engineering**: 8D molecular descriptors
+        - **Feature engineering**: 16D descriptors (physicochemical + Coulomb-like + fingerprint)
 
         **Visualization:**
         - **Streamlit**: Interactive web interface
@@ -436,6 +445,7 @@ elif page == "🔬 Feature 1: AI Discovery":
 
                                     if not vqe_result.get('error'):
                                         st.metric("Ground State Energy", f"{vqe_result['energy']:.6f} Ha")
+                                        show_simulation_provenance(vqe_result)
 
                                         # Plot convergence
                                         fig_conv = plot_convergence(
@@ -589,6 +599,7 @@ elif page == "🎮 Feature 2: Learning Game":
                                     st.metric("Ground State Energy", f"{vqe_result['energy']:.6f} Ha")
                                     st.metric("VQE Iterations", vqe_result['iterations'])
                                     st.metric("Qubits Used", vqe_result['num_qubits'])
+                                    show_simulation_provenance(vqe_result)
                                 else:
                                     st.error(f"VQE Error: {vqe_result['error']}")
 
@@ -637,6 +648,8 @@ elif page == "🎮 Feature 2: Learning Game":
 
                 else:
                     st.error(f"❌ Scoring error: {scoring_result.get('error')}")
+                    if "feature" in str(scoring_result.get('error', '')).lower():
+                        st.info("Try a simpler catalyst input (single metal or small oxide), for example [Pt], [Fe], or [Ni]=O.")
 
         else:
             st.error(f"❌ Invalid catalyst: {validation['error']}")
@@ -707,6 +720,7 @@ elif page == "📊 Quantum vs Classical":
                             st.metric("Energy", f"{chem_comp['vqe']['energy']:.6f} Ha")
                             st.metric("Iterations", chem_comp['vqe']['iterations'])
                             st.caption(chem_comp['vqe']['method'])
+                            show_simulation_provenance(chem_comp['vqe'])
 
                         with col2:
                             st.markdown("#### Hartree-Fock")
@@ -940,6 +954,7 @@ elif page == "🧪 Molecule Explorer":
                             st.metric("Iterations", vqe_result['iterations'])
                             st.metric("Qubits", vqe_result['num_qubits'])
                             st.caption(vqe_result['method'])
+                            show_simulation_provenance(vqe_result)
 
                             # Compare with HF
                             if st.checkbox("Compare with HF"):

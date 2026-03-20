@@ -91,6 +91,13 @@ CATALYST_PROPERTIES = {
     "[Cu]=O": {"d_band_center": -2.90, "binding_strength": 0.60, "electron_transfer": 0.75},
 }
 
+# Reaction-family BEP slopes used for catalyzed barrier adjustments.
+BEP_SLOPE_BY_REACTION = {
+    "oxidation": 0.65,
+    "reduction": 0.72,
+    "hydrogenation": 0.58,
+}
+
 
 # ========================================================================
 # REACTION PATHWAY CALCULATOR
@@ -183,14 +190,15 @@ class ReactionPathwayCalculator:
             # Uses Brønsted-Evans-Polanyi (BEP) relation
             uncatalyzed_barrier = self.reaction["activation_energy_uncatalyzed"]
 
-            # Catalyst lowers barrier based on binding strength
+            # Catalyst lowers barrier based on binding strength and reaction-family BEP slope.
             binding_strength = catalyst_props["binding_strength"]
-            barrier_reduction = binding_strength * 1.5  # Max 1.5 eV reduction
+            bep_slope = BEP_SLOPE_BY_REACTION.get(self.reaction["type"], 0.65)
+            barrier_reduction = min(uncatalyzed_barrier * 0.70, binding_strength * bep_slope * 2.0)
 
             # Check if catalyst is ideal for this reaction
             is_ideal = catalyst_smiles in self.reaction["ideal_catalysts"]
             if is_ideal:
-                barrier_reduction *= 1.3  # 30% bonus for ideal catalysts
+                barrier_reduction *= 1.2  # Conservative ideal-catalyst bonus
 
             catalyzed_barrier = max(0.1, uncatalyzed_barrier - barrier_reduction)
 
@@ -236,6 +244,8 @@ class ReactionPathwayCalculator:
                 "is_ideal_catalyst": is_ideal,
                 "catalyst_properties": catalyst_props,
                 "reaction_type": self.reaction["type"],
+                "bep_slope": float(bep_slope),
+                "barrier_reduction_eV": float(barrier_reduction),
                 "method": "VQE + D-band model",
                 "error": ""
             }
