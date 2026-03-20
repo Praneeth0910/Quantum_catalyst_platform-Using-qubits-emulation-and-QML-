@@ -227,9 +227,22 @@ def save_result_to_history(result_data):
 
 def show_simulation_provenance(sim_result: dict):
     """Display Hamiltonian provenance for VQE/HF results when available."""
+    generation_mode = sim_result.get("generation_mode", "Static Database")
+    st.metric("Hamiltonian Source", generation_mode)
+
+    active_electrons = int(sim_result.get("active_electrons", 0) or 0)
+    frozen_orbitals = int(sim_result.get("frozen_orbitals", 0) or 0)
+
+    if generation_mode == "Dynamic":
+        active_orbitals = max(1, int(sim_result.get("num_qubits", 0) // 2))
+        st.caption(f"Active Space: [{active_electrons}e, {active_orbitals}o]")
+        st.caption(f"Core Orbitals Frozen: {frozen_orbitals}")
+
     source = sim_result.get("hamiltonian_source")
     if source == "approximate_fallback":
         st.warning("Using approximate fallback Hamiltonian for an unsupported molecule. Interpret results as exploratory.")
+    elif source == "dynamic_pyscf":
+        st.success("Dynamic PySCF Hamiltonian generated successfully.")
     elif source == "database":
         st.caption("Hamiltonian source: curated static database")
 
@@ -397,6 +410,7 @@ elif page == "🔬 Feature 1: AI Discovery":
     discover_btn = st.button("🚀 Discover Catalysts", type="primary", use_container_width=True)
 
     if discover_btn:
+        st.info("Generating novel catalytic structures via RDKit mutation engine...")
         with st.spinner("🧬 Quantum AI is generating candidates..."):
             # Discover catalysts
             candidates = discover_catalysts(selected_reaction, num_candidates)

@@ -35,6 +35,16 @@ class MolecularHamiltonianDB:
     def __init__(self):
         self.database = self._build_database()
 
+    def _canonicalize_smiles(self, smiles: str) -> str:
+        """Canonicalize SMILES for consistent fallback-cache lookup."""
+        try:
+            mol = Chem.MolFromSmiles(smiles)
+            if mol is None:
+                return smiles
+            return Chem.MolToSmiles(mol, canonical=True)
+        except Exception:
+            return smiles
+
     def _build_database(self) -> Dict:
         """
         Build database of molecular Hamiltonians.
@@ -213,11 +223,13 @@ class MolecularHamiltonianDB:
             Tuple of (hamiltonian, nuclear_repulsion, reference_energy, num_qubits)
             or None if not found
         """
-        return self.database.get(smiles)
+        canonical = self._canonicalize_smiles(smiles)
+        return self.database.get(canonical)
 
     def has_molecule(self, smiles: str) -> bool:
         """Check if molecule is in database."""
-        return smiles in self.database
+        canonical = self._canonicalize_smiles(smiles)
+        return canonical in self.database
 
     def get_supported_molecules(self) -> list:
         """Get list of all supported SMILES."""
@@ -236,7 +248,8 @@ class MolecularHamiltonianDB:
 
         This allows extending the database with new molecules computed externally.
         """
-        self.database[smiles] = (hamiltonian, nuclear_repulsion, reference_energy, num_qubits)
+        canonical = self._canonicalize_smiles(smiles)
+        self.database[canonical] = (hamiltonian, nuclear_repulsion, reference_energy, num_qubits)
 
 
 # ========================================================================

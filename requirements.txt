@@ -4,6 +4,7 @@ py3dmol
 qiskit
 qiskit-algorithms
 qiskit-nature
+pyscf
 matplotlib
 numpy
 pandas

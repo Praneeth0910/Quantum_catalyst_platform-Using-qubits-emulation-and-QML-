@@ -1,7 +1,21 @@
 from rdkit import Chem
 from rdkit.Chem import AllChem
-from typing import List, Optional
+from typing import List, Optional, Set
 import random
+
+
+METAL_SWAP_OPTIONS = {
+    "Pt": ["Pd", "Ni", "Cu", "Rh", "Ru"],
+    "Pd": ["Pt", "Ni", "Cu", "Rh"],
+    "Ni": ["Co", "Fe", "Cu", "Pd"],
+    "Cu": ["Ag", "Au", "Ni", "Pd"],
+    "Fe": ["Co", "Ni", "Ru"],
+    "Ru": ["Rh", "Fe", "Co"],
+    "Rh": ["Ru", "Pd", "Pt"],
+}
+
+LIGAND_VARIANTS = ["=O", "O", "C"]
+DOPING_ATOMS = ["N", "O", "S"]
 
 def generate_3d_molecule(smiles: str):
     """
@@ -13,19 +27,118 @@ def generate_3d_molecule(smiles: str):
     if mol is None:
         return None
     mol = Chem.AddHs(mol)
-    params = AllChem.ETKDG()
+    params = AllChem.ETKDGv3()
+    params.randomSeed = 42
     success = AllChem.EmbedMolecule(mol, params)
     if success != 0:
         # Fallback: Compute 2D coords if 3D fails
         AllChem.Compute2DCoords(mol)
         return mol
-    AllChem.UFFOptimizeMolecule(mol)
+    try:
+        AllChem.UFFOptimizeMolecule(mol, maxIters=200)
+    except Exception:
+        # Keep embedded geometry even if force field optimization fails.
+        pass
     return mol
 
 
 def _is_valid_smiles(smiles: str) -> bool:
     """Return True if RDKit can parse SMILES."""
     return Chem.MolFromSmiles(smiles) is not None
+
+
+def _sanitize_and_canonicalize(smiles: str) -> Optional[str]:
+    """Return canonical sanitized SMILES or None for invalid molecules."""
+    try:
+        mol = Chem.MolFromSmiles(smiles, sanitize=False)
+        if mol is None:
+            return None
+        Chem.SanitizeMol(mol)
+        return Chem.MolToSmiles(mol, canonical=True)
+    except Exception:
+        return None
+
+
+def _metal_symbols_in_molecule(mol: Chem.Mol) -> List[str]:
+    """Return unique metal symbols from a molecule in insertion order."""
+    seen = set()
+    metals = []
+    for atom in mol.GetAtoms():
+        symbol = atom.GetSymbol()
+        if symbol in METAL_SWAP_OPTIONS and symbol not in seen:
+            seen.add(symbol)
+            metals.append(symbol)
+    return metals
+
+
+def mutate_catalyst(base_smiles: str, num_variations: int = 5) -> List[str]:
+    """
+    Generate mutated catalyst candidates from a base SMILES string.
+
+    Mutation strategies:
+    1. Metal swapping
+    2. Ligand addition (=O, -OH equivalent via O, methyl via C)
+    3. Peripheral-atom doping
+
+    Returns only unique, sanitized canonical SMILES strings.
+    """
+    base_mol = Chem.MolFromSmiles(base_smiles)
+    if base_mol is None:
+        return []
+
+    base_canonical = _sanitize_and_canonicalize(base_smiles)
+    valid_mutants: List[str] = []
+    seen: Set[str] = set()
+
+    def add_candidate(candidate_smiles: str):
+        canonical = _sanitize_and_canonicalize(candidate_smiles)
+        if canonical is None:
+            return
+        if base_canonical is not None and canonical == base_canonical:
+            return
+        if canonical in seen:
+            return
+        seen.add(canonical)
+        valid_mutants.append(canonical)
+
+    # 1) Metal-swapping mutations using substructure replacement.
+    metals = _metal_symbols_in_molecule(base_mol)
+    for metal in metals:
+        query = Chem.MolFromSmarts(f"[{metal}]")
+        if query is None:
+            continue
+        for replacement_symbol in METAL_SWAP_OPTIONS.get(metal, []):
+            replacement = Chem.MolFromSmiles(f"[{replacement_symbol}]")
+            if replacement is None:
+                continue
+            replaced = Chem.ReplaceSubstructs(base_mol, query, replacement, replaceAll=False)
+            for mol in replaced:
+                add_candidate(Chem.MolToSmiles(mol, canonical=True))
+
+    # 2) Ligand addition for single-metal centers.
+    if base_mol.GetNumAtoms() == 1 and base_mol.GetAtomWithIdx(0).GetSymbol() in METAL_SWAP_OPTIONS:
+        metal = base_mol.GetAtomWithIdx(0).GetSymbol()
+        for ligand in LIGAND_VARIANTS:
+            add_candidate(f"[{metal}]{ligand}")
+
+    # 3) Doping: replace first peripheral non-metal with common hetero dopants.
+    atom_symbols = [atom.GetSymbol() for atom in base_mol.GetAtoms()]
+    for idx, symbol in enumerate(atom_symbols):
+        if symbol in METAL_SWAP_OPTIONS or symbol == "H":
+            continue
+        for dopant in DOPING_ATOMS:
+            if dopant == symbol:
+                continue
+            editable = Chem.RWMol(base_mol)
+            editable.GetAtomWithIdx(idx).SetAtomicNum(Chem.Atom(dopant).GetAtomicNum())
+            add_candidate(Chem.MolToSmiles(editable.GetMol(), canonical=True))
+        break
+
+    if not valid_mutants:
+        return []
+
+    random.shuffle(valid_mutants)
+    return valid_mutants[:max(0, num_variations)]
 
 
 def mutate_catalyst_smiles(base_smiles: str, seed: Optional[int] = None) -> Optional[str]:
@@ -37,18 +150,10 @@ def mutate_catalyst_smiles(base_smiles: str, seed: Optional[int] = None) -> Opti
     if seed is not None:
         random.seed(seed)
 
-    mutation_map = {
-        "[Fe]": ["[Fe]=O", "[Co]", "[Ni]"],
-        "[Pt]": ["[Pd]", "[Rh]", "[Ru]"],
-        "[Ni]": ["[Ni]=O", "[Co]", "[Cu]"],
-        "[Cu]": ["[Cu]=O", "[Ag]", "[Au]"],
-        "[Pd]": ["[Pt]", "[Rh]", "[Ni]"],
-        "[Ru]": ["[Fe]", "[Rh]", "[Co]"],
-    }
-
-    candidates = mutation_map.get(base_smiles, [base_smiles])
-    candidate = random.choice(candidates)
-    return candidate if _is_valid_smiles(candidate) else None
+    candidates = mutate_catalyst(base_smiles, num_variations=5)
+    if not candidates:
+        return None
+    return random.choice(candidates)
 
 
 def generate_catalyst_candidates(
@@ -76,11 +181,15 @@ def generate_catalyst_candidates(
 
     for _ in range(max(1, num_candidates * 3)):
         base = random.choice(base_pool)
-        mutated = mutate_catalyst_smiles(base)
-        chosen = mutated if mutated is not None else base
-
-        if chosen not in generated and _is_valid_smiles(chosen):
-            generated.append(chosen)
+        variants = mutate_catalyst(base, num_variations=2)
+        if variants:
+            for chosen in variants:
+                if chosen not in generated and _is_valid_smiles(chosen):
+                    generated.append(chosen)
+                    if len(generated) >= num_candidates:
+                        break
+        elif base not in generated and _is_valid_smiles(base):
+            generated.append(base)
 
         if len(generated) >= num_candidates:
             break

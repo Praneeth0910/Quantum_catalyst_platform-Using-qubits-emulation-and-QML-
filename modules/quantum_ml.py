@@ -30,7 +30,7 @@ from typing import Dict, List, Tuple, Optional
 from rdkit import Chem
 from rdkit.Chem import Descriptors, AllChem
 import random
-from modules.molecule_generation import generate_catalyst_candidates
+from modules.molecule_generation import mutate_catalyst
 
 # NOTE: qiskit_machine_learning is optional - we implement core functionality without it
 
@@ -557,27 +557,48 @@ class CatalystGenerator:
         Returns:
             List of candidate dictionaries with properties
         """
-        candidates = []
+        candidates: List[Dict] = []
 
-        pool = generate_catalyst_candidates(self.target_reaction, num_candidates=max(6, num_candidates * 2))
+        reaction_bases = {
+            "H2_O2": "[Pt]",
+            "N2_H2": "[Fe]",
+            "CO2_reduction": "[Cu]",
+        }
+        base_catalyst = reaction_bases.get(self.target_reaction, "[Pd]")
 
-        # Generate candidates (in a full QGAN, this would sample from quantum state)
-        for i in range(num_candidates):
-            # Select generated candidates (QGAN-inspired sampling proxy)
-            base_catalyst = random.choice(pool)
+        mutated_smiles = mutate_catalyst(base_catalyst, num_variations=max(6, num_candidates * 2))
+        if not mutated_smiles:
+            mutated_smiles = [base_catalyst]
 
+        for smiles in mutated_smiles:
+            features = extract_molecular_features(smiles)
+            is_valid_features, _ = _validate_feature_vector(features)
+            if not is_valid_features:
+                continue
+
+            props = get_catalyst_properties(smiles)
+            candidates.append({
+                "smiles": smiles,
+                "features": features.tolist(),
+                "metal_type": props.get("metal_type"),
+                "generation_score": float(0.65 + 0.3 * np.mean(features)),
+                "method": "RDKit Mutation + QGAN Prior"
+            })
+
+        # Ensure minimum output size for downstream UI.
+        if not candidates:
             features = extract_molecular_features(base_catalyst)
             props = get_catalyst_properties(base_catalyst)
-
             candidates.append({
                 "smiles": base_catalyst,
                 "features": features.tolist(),
                 "metal_type": props.get("metal_type"),
                 "generation_score": float(0.65 + 0.3 * np.mean(features)),
-                "method": "QGAN Generation"
+                "method": "RDKit Mutation + QGAN Prior"
             })
 
-        return candidates
+        candidates.sort(key=lambda x: x["generation_score"], reverse=True)
+        return candidates[:max(1, num_candidates)]
 
 
 # ========================================================================

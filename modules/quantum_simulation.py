@@ -21,8 +21,20 @@ from qiskit.primitives import StatevectorEstimator
 from qiskit.circuit.library import RealAmplitudes, EfficientSU2
 from qiskit.quantum_info import SparsePauliOp
 from modules.hamiltonian_database import get_hamiltonian_db, smiles_to_xyz
-from typing import Dict, Optional
+from typing import Dict, Optional, Tuple
 from rdkit import Chem
+from modules.molecule_generation import generate_3d_molecule
+
+try:
+    from qiskit_nature.second_q.drivers import PySCFDriver
+    from qiskit_nature.second_q.transformers import ActiveSpaceTransformer
+    from qiskit_nature.second_q.mappers import JordanWignerMapper
+    HAS_QISKIT_NATURE_DYNAMIC = True
+except Exception:
+    PySCFDriver = None
+    ActiveSpaceTransformer = None
+    JordanWignerMapper = None
+    HAS_QISKIT_NATURE_DYNAMIC = False
 
 
 def _build_approximate_hamiltonian(smiles: str):
@@ -68,6 +80,85 @@ def _build_approximate_hamiltonian(smiles: str):
     return hamiltonian, 0.0, reference_energy, num_qubits
 
 
+def _build_pyscf_atom_string(smiles: str) -> Optional[str]:
+    """Build a PySCF-compatible atom string from RDKit 3D geometry."""
+    mol = generate_3d_molecule(smiles)
+    if mol is None or mol.GetNumConformers() == 0:
+        return smiles_to_xyz(smiles)
+
+    conf = mol.GetConformer()
+    lines = []
+    for atom in mol.GetAtoms():
+        pos = conf.GetAtomPosition(atom.GetIdx())
+        lines.append(f"{atom.GetSymbol()} {pos.x:.8f} {pos.y:.8f} {pos.z:.8f}")
+    return "; ".join(lines)
+
+
+def _select_active_space(num_electrons: int, num_spatial_orbitals: int) -> Tuple[int, int, int]:
+    """
+    Select a compact active-space window for larger problems.
+
+    Returns:
+        (active_electrons, active_orbitals, frozen_orbitals)
+    """
+    target_orbitals = min(4, max(2, num_spatial_orbitals // 2))
+    active_orbitals = max(2, min(num_spatial_orbitals, target_orbitals))
+
+    target_electrons = min(num_electrons, max(2, 2 * min(active_orbitals, 2)))
+    if target_electrons % 2 != 0:
+        target_electrons = target_electrons - 1 if target_electrons > 2 else target_electrons + 1
+    active_electrons = max(2, min(num_electrons, target_electrons))
+
+    frozen_orbitals = max(0, num_spatial_orbitals - active_orbitals)
+    return active_electrons, active_orbitals, frozen_orbitals
+
+
+def _try_dynamic_hamiltonian(smiles: str) -> Tuple[SparsePauliOp, float, int, int, int]:
+    """
+    Attempt dynamic Hamiltonian generation via PySCF + Qiskit Nature.
+
+    Returns:
+        (qubit_hamiltonian, reference_energy, num_qubits, active_electrons, frozen_orbitals)
+    """
+    if not HAS_QISKIT_NATURE_DYNAMIC:
+        raise RuntimeError("Qiskit Nature dynamic backend is unavailable.")
+
+    atom_string = _build_pyscf_atom_string(smiles)
+    if not atom_string:
+        raise ValueError(f"Could not build 3D coordinates for {smiles}")
+
+    driver = PySCFDriver(atom=atom_string, basis="sto3g")
+    problem = driver.run()
+
+    num_alpha, num_beta = problem.num_particles
+    num_electrons = int(num_alpha + num_beta)
+    num_spatial_orbitals = int(problem.num_spatial_orbitals)
+    required_qubits = 2 * num_spatial_orbitals
+
+    transformed_problem = problem
+    active_electrons = num_electrons
+    frozen_orbitals = 0
+
+    if required_qubits > 8:
+        active_electrons, active_orbitals, frozen_orbitals = _select_active_space(num_electrons, num_spatial_orbitals)
+        transformer = ActiveSpaceTransformer(
+            num_electrons=active_electrons,
+            num_spatial_orbitals=active_orbitals,
+        )
+        transformed_problem = transformer.transform(problem)
+
+    second_q_op = transformed_problem.hamiltonian.second_q_op()
+    mapper = JordanWignerMapper()
+    qubit_hamiltonian = mapper.map(second_q_op)
+
+    if not isinstance(qubit_hamiltonian, SparsePauliOp):
+        raise RuntimeError("Dynamic mapping did not return SparsePauliOp.")
+
+    reference_energy = float(getattr(transformed_problem, "reference_energy", 0.0) or 0.0)
+    num_qubits = int(qubit_hamiltonian.num_qubits)
+    return qubit_hamiltonian, reference_energy, num_qubits, active_electrons, frozen_orbitals
+
+
 def run_vqe_simulation(smiles: str, method: str = "VQE") -> Dict:
     """
     Run VQE simulation on a molecule using pre-computed Hamiltonian.
@@ -91,13 +182,35 @@ def run_vqe_simulation(smiles: str, method: str = "VQE") -> Dict:
         - method: Method used for simulation
         - error: Error message if simulation failed
     """
+    db = get_hamiltonian_db()
+
+    hamiltonian = None
+    reference_energy = 0.0
+    num_qubits = 0
+    hamiltonian_source = "none"
+    generation_mode = "Static Database"
+    active_electrons = 0
+    frozen_orbitals = 0
+
+    # Step 1: Attempt dynamic generation first.
     try:
-        # Step 1: Get Hamiltonian from database
-        db = get_hamiltonian_db()
+        (
+            hamiltonian,
+            reference_energy,
+            num_qubits,
+            active_electrons,
+            frozen_orbitals,
+        ) = _try_dynamic_hamiltonian(smiles)
+        hamiltonian_source = "dynamic_pyscf"
+        generation_mode = "Dynamic"
+    except Exception as dynamic_error:
+        print(f"[WARN] Dynamic generation failed for {smiles}: {dynamic_error}. Falling back to static database.")
 
-        hamiltonian_source = "database"
-
-        if not db.has_molecule(smiles):
+        if db.has_molecule(smiles):
+            hamiltonian, _, reference_energy, num_qubits = db.get_hamiltonian(smiles)
+            hamiltonian_source = "database"
+            generation_mode = "Static Database"
+        else:
             approx = _build_approximate_hamiltonian(smiles)
             if approx is None:
                 return {
@@ -107,15 +220,18 @@ def run_vqe_simulation(smiles: str, method: str = "VQE") -> Dict:
                     "iterations": 0,
                     "num_qubits": 0,
                     "method": method,
-                    "hamiltonian_source": "none"
+                    "hamiltonian_source": "none",
+                    "generation_mode": "Static Database",
+                    "active_electrons": 0,
+                    "frozen_orbitals": 0,
                 }
 
-            hamiltonian, nuclear_repulsion, reference_energy, num_qubits = approx
-            db.add_custom_hamiltonian(smiles, hamiltonian, nuclear_repulsion, reference_energy, num_qubits)
+            hamiltonian, _, reference_energy, num_qubits = approx
+            db.add_custom_hamiltonian(smiles, hamiltonian, 0.0, reference_energy, num_qubits)
             hamiltonian_source = "approximate_fallback"
-        else:
-            hamiltonian, nuclear_repulsion, reference_energy, num_qubits = db.get_hamiltonian(smiles)
+            generation_mode = "Static Database"
 
+    try:
         # Step 2: Choose simulation method
         if method == "HF":
             # Hartree-Fock approximation (classical reference)
@@ -126,6 +242,9 @@ def run_vqe_simulation(smiles: str, method: str = "VQE") -> Dict:
                 "num_qubits": num_qubits,
                 "method": "Hartree-Fock (Classical)",
                 "hamiltonian_source": hamiltonian_source,
+                "generation_mode": generation_mode,
+                "active_electrons": int(active_electrons),
+                "frozen_orbitals": int(frozen_orbitals),
                 "error": ""
             }
 
@@ -166,6 +285,9 @@ def run_vqe_simulation(smiles: str, method: str = "VQE") -> Dict:
             "num_qubits": num_qubits,
             "method": f"VQE (Optimizer: {optimizer.__class__.__name__})",
             "hamiltonian_source": hamiltonian_source,
+            "generation_mode": generation_mode,
+            "active_electrons": int(active_electrons),
+            "frozen_orbitals": int(frozen_orbitals),
             "optimal_parameters": result.optimal_parameters.tolist() if hasattr(result.optimal_parameters, 'tolist') else [],
             "error": ""
         }
@@ -178,7 +300,10 @@ def run_vqe_simulation(smiles: str, method: str = "VQE") -> Dict:
             "iterations": 0,
             "num_qubits": 0,
             "method": method,
-            "hamiltonian_source": "none"
+            "hamiltonian_source": "none",
+            "generation_mode": "Static Database",
+            "active_electrons": 0,
+            "frozen_orbitals": 0,
         }
 
 
