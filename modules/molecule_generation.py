@@ -71,14 +71,19 @@ def _metal_symbols_in_molecule(mol: Chem.Mol) -> List[str]:
     return metals
 
 
-def mutate_catalyst(base_smiles: str, num_variations: int = 5) -> List[str]:
+def mutate_catalyst(
+    base_smiles: str,
+    num_variations: int = 5,
+    mutation_mode: str = "all"
+) -> List[str]:
     """
     Generate mutated catalyst candidates from a base SMILES string.
 
-    Mutation strategies:
-    1. Metal swapping
-    2. Ligand addition (=O, -OH equivalent via O, methyl via C)
-    3. Peripheral-atom doping
+     Mutation strategies:
+     1. Metal swapping (mutation_mode="metal_swap")
+     2. Ligand addition oxide/hydroxyl/methyl
+         (mutation_mode="ligand_oxo" | "ligand_hydroxyl" | "ligand_methyl")
+     3. Peripheral-atom doping (mutation_mode="doping")
 
     Returns only unique, sanitized canonical SMILES strings.
     """
@@ -101,43 +106,50 @@ def mutate_catalyst(base_smiles: str, num_variations: int = 5) -> List[str]:
         seen.add(canonical)
         valid_mutants.append(canonical)
 
+    do_all = mutation_mode == "all"
+
     # 1) Metal-swapping mutations using substructure replacement.
-    metals = _metal_symbols_in_molecule(base_mol)
-    for metal in metals:
-        query = Chem.MolFromSmarts(f"[{metal}]")
-        if query is None:
-            continue
-        for replacement_symbol in METAL_SWAP_OPTIONS.get(metal, []):
-            replacement = Chem.MolFromSmiles(f"[{replacement_symbol}]")
-            if replacement is None:
+    if do_all or mutation_mode == "metal_swap":
+        metals = _metal_symbols_in_molecule(base_mol)
+        for metal in metals:
+            query = Chem.MolFromSmarts(f"[{metal}]")
+            if query is None:
                 continue
-            replaced = Chem.ReplaceSubstructs(base_mol, query, replacement, replaceAll=False)
-            for mol in replaced:
-                add_candidate(Chem.MolToSmiles(mol, canonical=True))
+            for replacement_symbol in METAL_SWAP_OPTIONS.get(metal, []):
+                replacement = Chem.MolFromSmiles(f"[{replacement_symbol}]")
+                if replacement is None:
+                    continue
+                replaced = Chem.ReplaceSubstructs(base_mol, query, replacement, replaceAll=False)
+                for mol in replaced:
+                    add_candidate(Chem.MolToSmiles(mol, canonical=True))
 
     # 2) Ligand addition for single-metal centers.
     if base_mol.GetNumAtoms() == 1 and base_mol.GetAtomWithIdx(0).GetSymbol() in METAL_SWAP_OPTIONS:
         metal = base_mol.GetAtomWithIdx(0).GetSymbol()
-        for ligand in LIGAND_VARIANTS:
-            add_candidate(f"[{metal}]{ligand}")
+        if do_all or mutation_mode == "ligand_oxo":
+            add_candidate(f"[{metal}]=O")
+        if do_all or mutation_mode == "ligand_hydroxyl":
+            add_candidate(f"[{metal}]O")
+        if do_all or mutation_mode == "ligand_methyl":
+            add_candidate(f"[{metal}]C")
 
     # 3) Doping: replace first peripheral non-metal with common hetero dopants.
-    atom_symbols = [atom.GetSymbol() for atom in base_mol.GetAtoms()]
-    for idx, symbol in enumerate(atom_symbols):
-        if symbol in METAL_SWAP_OPTIONS or symbol == "H":
-            continue
-        for dopant in DOPING_ATOMS:
-            if dopant == symbol:
+    if do_all or mutation_mode == "doping":
+        atom_symbols = [atom.GetSymbol() for atom in base_mol.GetAtoms()]
+        for idx, symbol in enumerate(atom_symbols):
+            if symbol in METAL_SWAP_OPTIONS or symbol == "H":
                 continue
-            editable = Chem.RWMol(base_mol)
-            editable.GetAtomWithIdx(idx).SetAtomicNum(Chem.Atom(dopant).GetAtomicNum())
-            add_candidate(Chem.MolToSmiles(editable.GetMol(), canonical=True))
-        break
+            for dopant in DOPING_ATOMS:
+                if dopant == symbol:
+                    continue
+                editable = Chem.RWMol(base_mol)
+                editable.GetAtomWithIdx(idx).SetAtomicNum(Chem.Atom(dopant).GetAtomicNum())
+                add_candidate(Chem.MolToSmiles(editable.GetMol(), canonical=True))
+            break
 
     if not valid_mutants:
         return []
 
-    random.shuffle(valid_mutants)
     return valid_mutants[:max(0, num_variations)]
 
 

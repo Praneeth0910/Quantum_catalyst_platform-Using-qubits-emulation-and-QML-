@@ -29,7 +29,8 @@ from modules.reaction_pathway import (
     compute_catalyst_score,
     get_supported_reactions,
     get_reaction_info,
-    REACTION_DATABASE
+    REACTION_DATABASE,
+    parse_dynamic_reaction,
 )
 from modules.quantum_ml import (
     discover_catalysts,
@@ -255,6 +256,21 @@ def show_simulation_provenance(sim_result: dict):
     elif source == "database":
         st.caption("Hamiltonian source: curated static database")
 
+
+def _map_custom_reaction_to_qml_key(parsed_reaction: dict) -> str:
+    """Map parsed custom reactions to the closest trained QSVM reaction key."""
+    if not parsed_reaction:
+        return "H2_O2"
+
+    reactants = parsed_reaction.get("reactants", [])
+    if "N#N" in reactants:
+        return "N2_H2"
+
+    reaction_type = parsed_reaction.get("type", "")
+    if reaction_type == "oxidation":
+        return "H2_O2"
+    return "CO2_reduction"
+
 # ========================================================================
 # PAGE: HOME
 # ========================================================================
@@ -401,7 +417,8 @@ elif page == "🔬 Feature 1: AI Discovery":
         reaction_options = {
             "H2_O2": "H₂ + O₂ → H₂O (Fuel Cell / Water Formation)",
             "N2_H2": "N₂ + 3H₂ → 2NH₃ (Haber Process / Ammonia)",
-            "CO2_reduction": "CO₂ + H₂ → CO + H₂O (Carbon Capture)"
+            "CO2_reduction": "CO₂ + H₂ → CO + H₂O (Carbon Capture)",
+            "CUSTOM": "Custom Reaction (Enter Equation)",
         }
 
         selected_reaction = st.selectbox(
@@ -410,8 +427,24 @@ elif page == "🔬 Feature 1: AI Discovery":
             format_func=lambda x: reaction_options[x]
         )
 
-        reaction_info = get_reaction_info(selected_reaction)
-        st.info(f"**Reaction:** {reaction_info['equation']}")
+        custom_reaction_equation = ""
+        parsed_custom_reaction = None
+
+        if selected_reaction == "CUSTOM":
+            custom_reaction_equation = st.text_input(
+                "Custom Reaction Equation:",
+                placeholder="e.g., CO + H2O -> CO2 + H2",
+                key="custom_discovery_equation",
+            )
+            if custom_reaction_equation:
+                parsed_custom_reaction = parse_dynamic_reaction(custom_reaction_equation)
+                if parsed_custom_reaction.get("error"):
+                    st.error(parsed_custom_reaction["error"])
+                else:
+                    st.info(f"**Reaction:** {parsed_custom_reaction['equation']}")
+        else:
+            reaction_info = get_reaction_info(selected_reaction)
+            st.info(f"**Reaction:** {reaction_info['equation']}")
 
     with col2:
         num_candidates = st.slider("Number of Candidates:", 3, 10, 5)
@@ -421,8 +454,20 @@ elif page == "🔬 Feature 1: AI Discovery":
     if discover_btn:
         st.info("Generating novel catalytic structures via RDKit mutation engine...")
         with st.spinner("🧬 Quantum AI is generating candidates..."):
+            if selected_reaction == "CUSTOM":
+                parsed_custom_reaction = parse_dynamic_reaction(custom_reaction_equation) if custom_reaction_equation else {"error": "Please enter a custom reaction equation."}
+                if parsed_custom_reaction.get("error"):
+                    st.error(parsed_custom_reaction["error"])
+                    st.stop()
+
+                discovery_reaction_key = _map_custom_reaction_to_qml_key(parsed_custom_reaction)
+                pathway_reaction_input = parsed_custom_reaction
+            else:
+                discovery_reaction_key = selected_reaction
+                pathway_reaction_input = selected_reaction
+
             # Discover catalysts
-            candidates = discover_catalysts(selected_reaction, num_candidates)
+            candidates = discover_catalysts(discovery_reaction_key, num_candidates)
 
             if candidates:
                 st.success(f"✅ Generated {len(candidates)} catalyst candidates!")
@@ -484,7 +529,7 @@ elif page == "🔬 Feature 1: AI Discovery":
                                         plt.close()
 
                                         # Run pathway
-                                        pathway = simulate_reaction_pathway(cand['smiles'], selected_reaction)
+                                        pathway = simulate_reaction_pathway(cand['smiles'], pathway_reaction_input)
 
                                         if not pathway.get('error'):
                                             fig_path = plot_energy_landscape(
@@ -512,7 +557,7 @@ elif page == "🔬 Feature 1: AI Discovery":
                 # Save to history
                 save_result_to_history({
                     'type': 'AI Discovery',
-                    'reaction': selected_reaction,
+                    'reaction': custom_reaction_equation if selected_reaction == "CUSTOM" else selected_reaction,
                     'candidates': candidates
                 })
 
@@ -539,17 +584,34 @@ elif page == "🎮 Feature 2: Learning Game":
     col1, col2 = st.columns(2)
 
     with col1:
+        game_options = list(REACTION_DATABASE.keys()) + ["CUSTOM"]
         game_reaction = st.selectbox(
             "Select Reaction:",
-            options=list(REACTION_DATABASE.keys()),
-            format_func=lambda x: REACTION_DATABASE[x]['name']
+            options=game_options,
+            format_func=lambda x: REACTION_DATABASE[x]['name'] if x in REACTION_DATABASE else "Custom Reaction (Enter Equation)"
         )
 
-        reaction_data = REACTION_DATABASE[game_reaction]
-        st.info(f"**Equation:** {reaction_data['equation']}")
+        custom_game_equation = ""
+        parsed_game_reaction = None
+
+        if game_reaction == "CUSTOM":
+            custom_game_equation = st.text_input(
+                "Custom Reaction Equation:",
+                placeholder="e.g., CO + H2O -> CO2 + H2",
+                key="custom_game_equation",
+            )
+            if custom_game_equation:
+                parsed_game_reaction = parse_dynamic_reaction(custom_game_equation)
+                if parsed_game_reaction.get("error"):
+                    st.error(parsed_game_reaction["error"])
+                else:
+                    st.info(f"**Equation:** {parsed_game_reaction['equation']}")
+        else:
+            reaction_data = REACTION_DATABASE[game_reaction]
+            st.info(f"**Equation:** {reaction_data['equation']}")
 
         # Show ideal catalysts hint
-        if st.checkbox("Show Hint"):
+        if st.checkbox("Show Hint") and game_reaction != "CUSTOM":
             st.warning(f"💡 Ideal catalysts: {', '.join(reaction_data['ideal_catalysts'])}")
 
     with col2:
@@ -572,11 +634,22 @@ elif page == "🎮 Feature 2: Learning Game":
             st.success(f"✅ Valid catalyst: **{validation['formula']}** ({validation['atom_count']} atoms)")
 
             with st.spinner("🧠 Quantum ML is evaluating your choice..."):
-                # Get ideal catalyst for comparison
-                ideal_catalyst = reaction_data['ideal_catalysts'][0]
+                if game_reaction == "CUSTOM":
+                    parsed_game_reaction = parse_dynamic_reaction(custom_game_equation) if custom_game_equation else {"error": "Please enter a custom reaction equation."}
+                    if parsed_game_reaction.get("error"):
+                        st.error(parsed_game_reaction["error"])
+                        st.stop()
+
+                    ideal_catalyst = parsed_game_reaction.get('ideal_catalysts', ['[Pt]'])[0]
+                    scoring_reaction_key = _map_custom_reaction_to_qml_key(parsed_game_reaction)
+                    pathway_reaction_input = parsed_game_reaction
+                else:
+                    ideal_catalyst = reaction_data['ideal_catalysts'][0]
+                    scoring_reaction_key = game_reaction
+                    pathway_reaction_input = game_reaction
 
                 # Score user's choice
-                scoring_result = score_user_catalyst(user_smiles, ideal_catalyst, game_reaction)
+                scoring_result = score_user_catalyst(user_smiles, ideal_catalyst, scoring_reaction_key)
 
                 if not scoring_result.get('error'):
                     st.markdown("---")
@@ -643,7 +716,7 @@ elif page == "🎮 Feature 2: Learning Game":
                                     plt.close()
 
                             # Reaction pathway
-                            pathway = simulate_reaction_pathway(user_smiles, game_reaction)
+                            pathway = simulate_reaction_pathway(user_smiles, pathway_reaction_input)
 
                             if not pathway.get('error'):
                                 st.markdown("### 🛤️ Reaction Energy Pathway")
@@ -678,7 +751,7 @@ elif page == "🎮 Feature 2: Learning Game":
                     # Save to history
                     save_result_to_history({
                         'type': 'Learning Game',
-                        'reaction': game_reaction,
+                        'reaction': custom_game_equation if game_reaction == "CUSTOM" else game_reaction,
                         'user_catalyst': user_catalyst,
                         'score': score
                     })

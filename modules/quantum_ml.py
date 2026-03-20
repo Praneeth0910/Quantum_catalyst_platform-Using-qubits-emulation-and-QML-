@@ -22,14 +22,15 @@ Key Algorithms:
 
 import numpy as np
 from qiskit import QuantumCircuit
+from qiskit.circuit import ParameterVector
 from qiskit.circuit.library import ZZFeatureMap, RealAmplitudes
 from qiskit_algorithms import VQE
 from qiskit_algorithms.optimizers import COBYLA, SPSA, SLSQP
 from qiskit.primitives import StatevectorSampler, StatevectorEstimator
+from qiskit.quantum_info import Statevector, state_fidelity
 from typing import Dict, List, Tuple, Optional
 from rdkit import Chem
 from rdkit.Chem import Descriptors
-import random
 from modules.molecule_generation import mutate_catalyst
 
 # NOTE: qiskit_machine_learning is optional - we implement core functionality without it
@@ -256,17 +257,15 @@ class QuantumCatalystScorer:
             if not valid_x1 or not valid_x2:
                 return 0.0
 
-            # Create feature map circuits
-            qc1 = self.feature_map.assign_parameters(x1)
-            qc2 = self.feature_map.assign_parameters(x2)
+            # Create and evaluate actual quantum states for the two feature vectors.
+            qc1 = self.feature_map.assign_parameters(np.clip(x1, 0.0, 1.0))
+            qc2 = self.feature_map.assign_parameters(np.clip(x2, 0.0, 1.0))
 
-            # Simplified: use Euclidean distance as proxy
-            # In full implementation, would compute state fidelity
-            distance = np.linalg.norm(x1 - x2)
-            similarity = np.exp(-distance)  # Gaussian kernel approximation
-
-            return similarity
-        except:
+            state1 = Statevector(qc1)
+            state2 = Statevector(qc2)
+            fidelity = float(state_fidelity(state1, state2))
+            return float(np.clip(fidelity, 0.0, 1.0))
+        except Exception:
             return 0.5
 
     def score_catalyst(self, smiles: str) -> Dict:
@@ -508,6 +507,9 @@ class CatalystGenerator:
         """
         self.target_reaction = target_reaction
         self.num_qubits = 8
+        self.theta_1 = ParameterVector("theta_1", self.num_qubits)
+        self.theta_2 = ParameterVector("theta_2", self.num_qubits)
+        self.theta_3 = ParameterVector("theta_3", self.num_qubits)
         self.generator = self._build_generator()
 
     def _build_generator(self) -> QuantumCircuit:
@@ -519,10 +521,9 @@ class CatalystGenerator:
         qc = QuantumCircuit(self.num_qubits)
 
         # Parameterized circuit (generator)
-        # In a full QGAN, these parameters would be trained
         for i in range(self.num_qubits):
-            qc.ry(np.pi / 4, i)
-            qc.rz(np.pi / 3, i)
+            qc.ry(self.theta_1[i], i)
+            qc.rz(self.theta_2[i], i)
 
         # Entanglement
         for i in range(self.num_qubits - 1):
@@ -530,9 +531,38 @@ class CatalystGenerator:
 
         # More parameterization
         for i in range(self.num_qubits):
-            qc.ry(np.pi / 6, i)
+            qc.ry(self.theta_3[i], i)
 
         return qc
+
+    def _bitstring_to_action(self, bitstring: str) -> str:
+        """Map measured quantum bitstrings to mutation actions."""
+        action_map = {
+            "00": "metal_swap",
+            "01": "ligand_oxo",
+            "10": "ligand_hydroxyl",
+            "11": "doping",
+        }
+        return action_map.get(bitstring[:2], "metal_swap")
+
+    def _sample_quantum_actions(self, num_actions: int) -> List[str]:
+        """Generate mutation actions from statevector probabilities."""
+        param_values = {}
+        for i in range(self.num_qubits):
+            # Deterministic but reaction-dependent parameterization.
+            seed_value = (hash((self.target_reaction, i)) % 10_000) / 10_000.0
+            param_values[self.theta_1[i]] = 2 * np.pi * seed_value
+            param_values[self.theta_2[i]] = 2 * np.pi * ((seed_value * 1.7) % 1.0)
+            param_values[self.theta_3[i]] = 2 * np.pi * ((seed_value * 2.3) % 1.0)
+
+        bound = self.generator.assign_parameters(param_values)
+        state = Statevector(bound)
+        probabilities = state.probabilities_dict()
+
+        # Use highest-probability outcomes for deterministic action selection.
+        top_bitstrings = sorted(probabilities.items(), key=lambda kv: kv[1], reverse=True)
+        selected = [bits for bits, _ in top_bitstrings[:max(1, num_actions)]]
+        return [self._bitstring_to_action(bits) for bits in selected]
 
     def generate_candidates(self, num_candidates: int = 5) -> List[Dict]:
         """
@@ -553,11 +583,24 @@ class CatalystGenerator:
         }
         base_catalyst = reaction_bases.get(self.target_reaction, "[Pd]")
 
-        mutated_smiles = mutate_catalyst(base_catalyst, num_variations=max(6, num_candidates * 2))
-        if not mutated_smiles:
-            mutated_smiles = [base_catalyst]
+        action_sequence = self._sample_quantum_actions(max(6, num_candidates * 2))
 
-        for smiles in mutated_smiles:
+        generated_smiles: List[str] = []
+        seen = set()
+        for action in action_sequence:
+            for smiles in mutate_catalyst(base_catalyst, num_variations=3, mutation_mode=action):
+                if smiles not in seen:
+                    seen.add(smiles)
+                    generated_smiles.append(smiles)
+                if len(generated_smiles) >= max(6, num_candidates * 2):
+                    break
+            if len(generated_smiles) >= max(6, num_candidates * 2):
+                break
+
+        if not generated_smiles:
+            generated_smiles = [base_catalyst]
+
+        for smiles in generated_smiles:
             features = extract_molecular_features(smiles)
             is_valid_features, _ = _validate_feature_vector(features)
             if not is_valid_features:
@@ -569,7 +612,7 @@ class CatalystGenerator:
                 "features": features.tolist(),
                 "metal_type": props.get("metal_type"),
                 "generation_score": float(0.65 + 0.3 * np.mean(features)),
-                "method": "RDKit Mutation + QGAN Prior"
+                "method": "Quantum Statevector-Driven Mutation"
             })
 
         # Ensure minimum output size for downstream UI.
@@ -581,7 +624,7 @@ class CatalystGenerator:
                 "features": features.tolist(),
                 "metal_type": props.get("metal_type"),
                 "generation_score": float(0.65 + 0.3 * np.mean(features)),
-                "method": "RDKit Mutation + QGAN Prior"
+                "method": "Quantum Statevector-Driven Mutation"
             })
 
         candidates.sort(key=lambda x: x["generation_score"], reverse=True)

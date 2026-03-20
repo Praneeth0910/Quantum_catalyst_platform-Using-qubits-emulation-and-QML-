@@ -18,9 +18,11 @@ Reaction States:
 
 import numpy as np
 import math
+import re
 from typing import Dict, List, Tuple
 from modules.quantum_simulation import run_vqe_simulation
 from modules.quantum_ml import get_catalyst_properties
+from modules.molecule_validator import process_molecule_input
 
 
 # ========================================================================
@@ -100,6 +102,92 @@ BEP_SLOPE_BY_REACTION = {
 }
 
 
+def _infer_reaction_type(reactants: List[str], products: List[str]) -> str:
+    """Infer reaction family from reactant/product composition."""
+    if "O=O" in reactants or "O=O" in products:
+        return "oxidation"
+    if any(s in reactants + products for s in ["O=C=O", "[C-]#[O+]", "CO", "C(=O)=O"]):
+        return "reduction"
+    return "reduction"
+
+
+def _parse_reaction_term(term: str) -> Tuple[int, str]:
+    """Parse a stoichiometric reaction term (e.g., '3H2' or '2 H2O')."""
+    cleaned = term.strip()
+    if not cleaned:
+        raise ValueError("Empty reaction term")
+
+    match = re.match(r"^\s*(\d+)\s*([A-Za-z0-9\[\]\(\)=#\+\-]+)\s*$", cleaned)
+    if match:
+        coeff = int(match.group(1))
+        species = match.group(2)
+        return coeff, species
+
+    return 1, cleaned
+
+
+def parse_dynamic_reaction(equation: str) -> Dict:
+    """
+    Parse a user reaction equation into validated internal pathway format.
+
+    Example:
+        "H2 + O2 -> H2O"
+    """
+    if not equation or "->" not in equation:
+        return {"error": "Reaction must contain '->', e.g., H2 + O2 -> H2O"}
+
+    left, right = equation.split("->", 1)
+    left_terms = [t.strip() for t in left.split("+") if t.strip()]
+    right_terms = [t.strip() for t in right.split("+") if t.strip()]
+
+    if not left_terms or not right_terms:
+        return {"error": "Both reactant and product sides must contain at least one species."}
+
+    reactants: List[str] = []
+    products: List[str] = []
+
+    try:
+        for term in left_terms:
+            coeff, species = _parse_reaction_term(term)
+            validated = process_molecule_input(species, max_atoms=20)
+            if not validated.get("valid"):
+                return {"error": f"Invalid reactant '{species}': {validated.get('error', 'unknown error')}"}
+            reactants.extend([validated["smiles"]] * coeff)
+
+        for term in right_terms:
+            coeff, species = _parse_reaction_term(term)
+            validated = process_molecule_input(species, max_atoms=20)
+            if not validated.get("valid"):
+                return {"error": f"Invalid product '{species}': {validated.get('error', 'unknown error')}"}
+            products.extend([validated["smiles"]] * coeff)
+    except Exception as exc:
+        return {"error": f"Failed to parse reaction equation: {exc}"}
+
+    # Fast baseline enthalpy estimate from HF fallback energies.
+    reactant_e = 0.0
+    product_e = 0.0
+    for s in reactants:
+        r = run_vqe_simulation(s, method="HF")
+        reactant_e += float(r.get("energy", 0.0))
+    for s in products:
+        r = run_vqe_simulation(s, method="HF")
+        product_e += float(r.get("energy", 0.0))
+
+    reaction_type = _infer_reaction_type(reactants, products)
+
+    return {
+        "name": "Custom Reaction",
+        "equation": equation.strip(),
+        "reactants": reactants,
+        "products": products,
+        "type": reaction_type,
+        "ideal_catalysts": ["[Pt]", "[Fe]", "[Cu]"],
+        "activation_energy_uncatalyzed": 2.8,
+        "estimated_reaction_enthalpy": float(product_e - reactant_e),
+        "error": "",
+    }
+
+
 def calculate_turnover_frequency(activation_energy_hartree: float, temp_k: float = 298.15) -> float:
     """
     Estimate turnover frequency (s^-1) via an Arrhenius/Eyring-style prefactor.
@@ -142,13 +230,18 @@ class ReactionPathwayCalculator:
     Calculate reaction pathways using real VQE and chemistry principles.
     """
 
-    def __init__(self, reaction_name: str):
+    def __init__(self, reaction_name: str, custom_reaction: Dict = None):
         """
         Initialize calculator for a specific reaction.
 
         Args:
             reaction_name: Key in REACTION_DATABASE
         """
+        if custom_reaction is not None:
+            self.reaction = custom_reaction
+            self.reaction_name = "custom"
+            return
+
         if reaction_name not in REACTION_DATABASE:
             raise ValueError(f"Unknown reaction: {reaction_name}")
 
@@ -381,18 +474,31 @@ class ReactionPathwayCalculator:
 # CONVENIENCE FUNCTIONS
 # ========================================================================
 
-def simulate_reaction_pathway(catalyst: str, reaction_name: str = "H2_O2") -> Dict:
+def simulate_reaction_pathway(catalyst: str, reaction_name: object = "H2_O2") -> Dict:
     """
     Simulate reaction pathway with real VQE calculations.
 
     Args:
         catalyst: Catalyst SMILES string
-        reaction_name: Reaction identifier
+        reaction_name: Reaction identifier key, custom equation string, or parsed reaction dict
 
     Returns:
         Dictionary with pathway data
     """
-    calculator = ReactionPathwayCalculator(reaction_name)
+    custom_reaction = None
+    reaction_key = "H2_O2"
+
+    if isinstance(reaction_name, dict):
+        custom_reaction = reaction_name
+    elif isinstance(reaction_name, str) and "->" in reaction_name:
+        parsed = parse_dynamic_reaction(reaction_name)
+        if parsed.get("error"):
+            return {"error": parsed["error"]}
+        custom_reaction = parsed
+    else:
+        reaction_key = str(reaction_name)
+
+    calculator = ReactionPathwayCalculator(reaction_key, custom_reaction=custom_reaction)
     result = calculator.calculate_pathway(catalyst)
 
     # Add backward compatibility fields
