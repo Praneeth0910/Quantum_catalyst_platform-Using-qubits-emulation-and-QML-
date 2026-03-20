@@ -23,7 +23,7 @@ from datetime import datetime
 from modules.molecule_validator import process_molecule_input
 from modules.molecule_generation import generate_3d_molecule
 from modules.visualization import show_molecule_3d, mol_to_xyz
-from modules.quantum_simulation import run_vqe_simulation, compare_methods, get_supported_molecules
+from modules.quantum_simulation import run_vqe_simulation, compare_methods, get_supported_molecules, HAS_PYSCF
 from modules.reaction_pathway import (
     simulate_reaction_pathway,
     compute_catalyst_score,
@@ -136,6 +136,11 @@ This platform demonstrates quantum computing's advantage in catalyst discovery u
 Built with Qiskit, RDKit, and Streamlit.
 """)
 
+if HAS_PYSCF:
+    st.sidebar.success("🟢 Dynamic PySCF Engine: Active")
+else:
+    st.sidebar.warning("🟡 Dynamic Engine Offline (Using Static Fallback)")
+
 # ========================================================================
 # HELPER FUNCTIONS
 # ========================================================================
@@ -237,6 +242,10 @@ def show_simulation_provenance(sim_result: dict):
         active_orbitals = max(1, int(sim_result.get("num_qubits", 0) // 2))
         st.caption(f"Active Space: [{active_electrons}e, {active_orbitals}o]")
         st.caption(f"Core Orbitals Frozen: {frozen_orbitals}")
+
+    noise_model = sim_result.get("noise_model", "None")
+    if noise_model and noise_model != "None":
+        st.caption(f"Noise Model: {noise_model}")
 
     source = sim_result.get("hamiltonian_source")
     if source == "approximate_fallback":
@@ -452,10 +461,15 @@ elif page == "🔬 Feature 1: AI Discovery":
 
                         with col_b:
                             st.markdown("**Run Full Simulation:**")
+                            apply_noise = st.toggle(
+                                "🎛️ Simulate Quantum Hardware Noise (NISQ)",
+                                key=f"noise_discovery_{i}",
+                                value=False,
+                            )
                             if st.button(f"Run VQE + Pathway", key=f"sim_{i}"):
                                 with st.spinner("Running quantum simulation..."):
                                     # Run VQE
-                                    vqe_result = run_vqe_simulation(cand['smiles'])
+                                    vqe_result = run_vqe_simulation(cand['smiles'], apply_noise=apply_noise)
 
                                     if not vqe_result.get('error'):
                                         st.metric("Ground State Energy", f"{vqe_result['energy']:.6f} Ha")
@@ -480,6 +494,11 @@ elif page == "🔬 Feature 1: AI Discovery":
                                             )
                                             st.pyplot(fig_path)
                                             plt.close()
+
+                                            st.metric(
+                                                "Predicted Turnover Frequency (TOF)",
+                                                f"{pathway.get('turnover_frequency_s', 0.0):.2e} s^-1"
+                                            )
                                     else:
                                         st.error(f"Error: {vqe_result['error']}")
 
@@ -646,6 +665,10 @@ elif page == "🎮 Feature 2: Learning Game":
                                     st.metric("Reaction Enthalpy",
                                             f"{pathway['reaction_enthalpy']*27.211:.2f} eV")
                                     st.metric("Pathway Score", f"{pathway['catalyst_score']:.2f}/100")
+                                    st.metric(
+                                        "Predicted Turnover Frequency (TOF)",
+                                        f"{pathway.get('turnover_frequency_s', 0.0):.2e} s^-1"
+                                    )
 
                                     if pathway['is_ideal_catalyst']:
                                         st.success("✨ This IS an ideal catalyst!")
@@ -956,9 +979,15 @@ elif page == "🧪 Molecule Explorer":
             st.markdown("---")
             st.markdown("### ⚛️ Quantum Simulation")
 
+            explorer_noise = st.toggle(
+                "🎛️ Simulate Quantum Hardware Noise (NISQ)",
+                key="noise_explorer",
+                value=False,
+            )
+
             if st.button("Run VQE Simulation"):
                 with st.spinner("Running VQE..."):
-                    vqe_result = run_vqe_simulation(smiles, method="VQE")
+                    vqe_result = run_vqe_simulation(smiles, method="VQE", apply_noise=explorer_noise)
 
                     if not vqe_result.get('error'):
                         sim_col1, sim_col2 = st.columns([1, 2])

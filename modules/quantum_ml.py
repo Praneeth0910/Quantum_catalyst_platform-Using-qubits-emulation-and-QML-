@@ -28,7 +28,7 @@ from qiskit_algorithms.optimizers import COBYLA, SPSA, SLSQP
 from qiskit.primitives import StatevectorSampler, StatevectorEstimator
 from typing import Dict, List, Tuple, Optional
 from rdkit import Chem
-from rdkit.Chem import Descriptors, AllChem
+from rdkit.Chem import Descriptors
 import random
 from modules.molecule_generation import mutate_catalyst
 
@@ -79,9 +79,8 @@ def extract_molecular_features(smiles: str) -> np.ndarray:
     Extract numerical features from a molecule for ML algorithms.
 
     Features extracted (16D):
-    - 8 physicochemical descriptors
-    - 4 Coulomb-like matrix spectrum descriptors
-    - 4 Morgan fingerprint block-density descriptors
+    - 8 baseline physicochemical descriptors
+    - 8 additional descriptors for kinetics and catalyst chemistry
 
     Args:
         smiles: SMILES string
@@ -94,8 +93,8 @@ def extract_molecular_features(smiles: str) -> np.ndarray:
         if mol is None:
             return np.zeros(FEATURE_DIMENSION)
 
-        # 8D physicochemical descriptor block
-        physchem = np.array([
+        # Baseline 8 descriptors
+        baseline = np.array([
             Descriptors.MolWt(mol),                    # Molecular weight
             mol.GetNumHeavyAtoms(),                     # Heavy atoms
             sum(1 for atom in mol.GetAtoms() if atom.GetAtomicNum() not in [1, 6]),  # Heteroatoms
@@ -107,43 +106,31 @@ def extract_molecular_features(smiles: str) -> np.ndarray:
         ], dtype=float)
 
         # Normalize to [0, 1] range
-        # Use domain knowledge for scaling
-        scales = np.array([200.0, 10.0, 5.0, 5.0, 5.0, 150.0, 10.0, 50.0])
-        physchem = np.clip(physchem / scales, 0, 1)
+        baseline_scales = np.array([200.0, 20.0, 10.0, 10.0, 6.0, 200.0, 20.0, 120.0])
+        baseline = np.clip(baseline / baseline_scales, 0, 1)
 
-        # 4D Coulomb-like spectrum block from graph-distance approximation
-        atoms = [atom.GetAtomicNum() for atom in mol.GetAtoms()]
-        n = len(atoms)
-        if n == 0:
-            coulomb_features = np.zeros(4)
-        else:
-            dist_matrix = Chem.GetDistanceMatrix(mol)
-            cmat = np.zeros((n, n), dtype=float)
-            for i in range(n):
-                zi = atoms[i]
-                for j in range(n):
-                    zj = atoms[j]
-                    if i == j:
-                        cmat[i, j] = 0.5 * (zi ** 2.4)
-                    else:
-                        cmat[i, j] = (zi * zj) / max(1.0, float(dist_matrix[i, j]))
+        # Additional 8 descriptors requested for 16D alignment.
+        carbon_count = sum(1 for atom in mol.GetAtoms() if atom.GetAtomicNum() == 6)
+        heavy_atoms = max(1, mol.GetNumHeavyAtoms())
+        formal_charge = float(sum(atom.GetFormalCharge() for atom in mol.GetAtoms()))
+        heavy_to_carbon_ratio = float(heavy_atoms / max(1, carbon_count))
 
-            eigvals = np.sort(np.abs(np.linalg.eigvals(cmat).real))[::-1]
-            coulomb_features = np.zeros(4)
-            take = min(4, len(eigvals))
-            coulomb_features[:take] = eigvals[:take]
-            coulomb_features = np.clip(coulomb_features / np.array([500, 200, 100, 50], dtype=float), 0, 1)
-
-        # 4D Morgan fingerprint density block
-        fp = AllChem.GetMorganFingerprintAsBitVect(mol, radius=2, nBits=128)
-        fp_arr = np.array(list(fp), dtype=float)
-        block_size = 32
-        fp_features = np.array([
-            np.mean(fp_arr[i * block_size:(i + 1) * block_size])
-            for i in range(4)
+        extra = np.array([
+            Descriptors.NumHDonors(mol),
+            Descriptors.NumHAcceptors(mol),
+            Descriptors.RingCount(mol),
+            Descriptors.FractionCSP3(mol),
+            Descriptors.NumAliphaticRings(mol),
+            Descriptors.NumAromaticRings(mol),
+            formal_charge,
+            heavy_to_carbon_ratio,
         ], dtype=float)
 
-        features = np.concatenate([physchem, coulomb_features, fp_features])
+        extra_scales = np.array([10.0, 15.0, 8.0, 1.0, 8.0, 8.0, 5.0, 10.0])
+        extra_shift = np.array([0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 2.5, 0.0])
+        extra = np.clip((extra + extra_shift) / extra_scales, 0, 1)
+
+        features = np.concatenate([baseline, extra])
         return np.clip(features, 0, 1)
 
     except Exception:
@@ -520,7 +507,7 @@ class CatalystGenerator:
             target_reaction: Target reaction type
         """
         self.target_reaction = target_reaction
-        self.num_qubits = 4
+        self.num_qubits = 8
         self.generator = self._build_generator()
 
     def _build_generator(self) -> QuantumCircuit:

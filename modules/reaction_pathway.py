@@ -17,6 +17,7 @@ Reaction States:
 """
 
 import numpy as np
+import math
 from typing import Dict, List, Tuple
 from modules.quantum_simulation import run_vqe_simulation
 from modules.quantum_ml import get_catalyst_properties
@@ -97,6 +98,39 @@ BEP_SLOPE_BY_REACTION = {
     "reduction": 0.72,
     "hydrogenation": 0.58,
 }
+
+
+def calculate_turnover_frequency(activation_energy_hartree: float, temp_k: float = 298.15) -> float:
+    """
+    Estimate turnover frequency (s^-1) via an Arrhenius/Eyring-style prefactor.
+
+    k = (k_B T / h) * exp(-E_a / (R T))
+
+    Args:
+        activation_energy_hartree: Activation barrier in Hartree.
+        temp_k: Temperature in Kelvin.
+
+    Returns:
+        Estimated turnover frequency in s^-1.
+    """
+    if temp_k <= 0:
+        return 0.0
+
+    # Constants (SI)
+    k_b = 1.380649e-23       # J/K
+    h = 6.62607015e-34       # J*s
+    r = 8.314462618          # J/(mol*K)
+    hartree_to_j_per_mol = 2.62549962e6
+
+    ea_j_per_mol = max(0.0, abs(float(activation_energy_hartree)) * hartree_to_j_per_mol)
+    prefactor = (k_b * temp_k) / h
+    exponent = -ea_j_per_mol / (r * temp_k)
+
+    # Avoid underflow warnings for very large barriers.
+    if exponent < -700:
+        return 0.0
+
+    return float(prefactor * math.exp(exponent))
 
 
 # ========================================================================
@@ -234,12 +268,16 @@ class ReactionPathwayCalculator:
                 catalyst_props
             )
 
+            # Step 8: Microkinetic observable
+            tof_s = calculate_turnover_frequency(activation_barrier_forward)
+
             return {
                 "states": states,
                 "energies": energies,
                 "activation_barrier_forward": float(activation_barrier_forward),
                 "activation_barrier_reverse": float(activation_barrier_reverse),
                 "reaction_enthalpy": float(reaction_enthalpy),
+                "turnover_frequency_s": float(tof_s),
                 "catalyst_score": score,
                 "is_ideal_catalyst": is_ideal,
                 "catalyst_properties": catalyst_props,

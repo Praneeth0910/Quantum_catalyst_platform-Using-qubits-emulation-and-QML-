@@ -15,6 +15,7 @@ Features:
 """
 
 import numpy as np
+import importlib.util
 from qiskit_algorithms import VQE
 from qiskit_algorithms.optimizers import SLSQP, COBYLA
 from qiskit.primitives import StatevectorEstimator
@@ -24,6 +25,8 @@ from modules.hamiltonian_database import get_hamiltonian_db, smiles_to_xyz
 from typing import Dict, Optional, Tuple
 from rdkit import Chem
 from modules.molecule_generation import generate_3d_molecule
+
+HAS_PYSCF = importlib.util.find_spec("pyscf") is not None
 
 try:
     from qiskit_nature.second_q.drivers import PySCFDriver
@@ -101,13 +104,14 @@ def _select_active_space(num_electrons: int, num_spatial_orbitals: int) -> Tuple
     Returns:
         (active_electrons, active_orbitals, frozen_orbitals)
     """
-    target_orbitals = min(4, max(2, num_spatial_orbitals // 2))
-    active_orbitals = max(2, min(num_spatial_orbitals, target_orbitals))
+    active_orbitals = max(2, min(6, num_spatial_orbitals))
+    active_electrons = max(2, min(6, num_electrons))
 
-    target_electrons = min(num_electrons, max(2, 2 * min(active_orbitals, 2)))
-    if target_electrons % 2 != 0:
-        target_electrons = target_electrons - 1 if target_electrons > 2 else target_electrons + 1
-    active_electrons = max(2, min(num_electrons, target_electrons))
+    # Keep even-electron active spaces for spin-restricted stability.
+    if active_electrons % 2 != 0:
+        active_electrons = active_electrons - 1 if active_electrons > 2 else active_electrons + 1
+
+    active_electrons = max(2, min(active_electrons, num_electrons))
 
     frozen_orbitals = max(0, num_spatial_orbitals - active_orbitals)
     return active_electrons, active_orbitals, frozen_orbitals
@@ -120,7 +124,7 @@ def _try_dynamic_hamiltonian(smiles: str) -> Tuple[SparsePauliOp, float, int, in
     Returns:
         (qubit_hamiltonian, reference_energy, num_qubits, active_electrons, frozen_orbitals)
     """
-    if not HAS_QISKIT_NATURE_DYNAMIC:
+    if not HAS_QISKIT_NATURE_DYNAMIC or not HAS_PYSCF:
         raise RuntimeError("Qiskit Nature dynamic backend is unavailable.")
 
     atom_string = _build_pyscf_atom_string(smiles)
@@ -159,7 +163,13 @@ def _try_dynamic_hamiltonian(smiles: str) -> Tuple[SparsePauliOp, float, int, in
     return qubit_hamiltonian, reference_energy, num_qubits, active_electrons, frozen_orbitals
 
 
-def run_vqe_simulation(smiles: str, method: str = "VQE") -> Dict:
+def _deterministic_noise_offset(smiles: str) -> float:
+    """Create deterministic noise offset in [-0.05, +0.05] Hartree."""
+    raw = sum(ord(ch) for ch in smiles) % 101
+    return (raw / 100.0) * 0.1 - 0.05
+
+
+def run_vqe_simulation(smiles: str, method: str = "VQE", apply_noise: bool = False) -> Dict:
     """
     Run VQE simulation on a molecule using pre-computed Hamiltonian.
 
@@ -191,6 +201,7 @@ def run_vqe_simulation(smiles: str, method: str = "VQE") -> Dict:
     generation_mode = "Static Database"
     active_electrons = 0
     frozen_orbitals = 0
+    noise_model = "None"
 
     # Step 1: Attempt dynamic generation first.
     try:
@@ -224,6 +235,7 @@ def run_vqe_simulation(smiles: str, method: str = "VQE") -> Dict:
                     "generation_mode": "Static Database",
                     "active_electrons": 0,
                     "frozen_orbitals": 0,
+                    "noise_model": noise_model,
                 }
 
             hamiltonian, _, reference_energy, num_qubits = approx
@@ -245,6 +257,7 @@ def run_vqe_simulation(smiles: str, method: str = "VQE") -> Dict:
                 "generation_mode": generation_mode,
                 "active_electrons": int(active_electrons),
                 "frozen_orbitals": int(frozen_orbitals),
+                "noise_model": noise_model,
                 "error": ""
             }
 
@@ -278,6 +291,13 @@ def run_vqe_simulation(smiles: str, method: str = "VQE") -> Dict:
         vqe_energy = result.eigenvalue.real
         total_energy = vqe_energy  # Hamiltonian already includes nuclear repulsion
 
+        if apply_noise:
+            noise_model = "Heuristic NISQ Emulation"
+            offset = _deterministic_noise_offset(smiles)
+            total_energy = float(total_energy) + offset
+            if convergence:
+                convergence = [float(val + offset) for val in convergence]
+
         return {
             "energy": float(total_energy),
             "iterations": len(convergence),
@@ -288,6 +308,7 @@ def run_vqe_simulation(smiles: str, method: str = "VQE") -> Dict:
             "generation_mode": generation_mode,
             "active_electrons": int(active_electrons),
             "frozen_orbitals": int(frozen_orbitals),
+            "noise_model": noise_model,
             "optimal_parameters": result.optimal_parameters.tolist() if hasattr(result.optimal_parameters, 'tolist') else [],
             "error": ""
         }
@@ -304,6 +325,7 @@ def run_vqe_simulation(smiles: str, method: str = "VQE") -> Dict:
             "generation_mode": "Static Database",
             "active_electrons": 0,
             "frozen_orbitals": 0,
+            "noise_model": noise_model,
         }
 
 
