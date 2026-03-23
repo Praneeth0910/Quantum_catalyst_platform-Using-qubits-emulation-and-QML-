@@ -17,7 +17,20 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import json
+import streamlit as st
 from datetime import datetime
+#chaching wrappers
+@st.cache_data(ttl=3600)
+def cached_vqe_simulation(smiles, apply_noise=False):
+    return run_vqe_simulation(smiles, apply_noise=apply_noise)
+
+@st.cache_data(ttl=3600)
+def cached_pathway_simulation(smiles, reaction_input):
+    return simulate_reaction_pathway(smiles, reaction_input)
+
+@st.cache_data(ttl=3600)
+def cached_discover_catalysts(reaction_key, num_cands):
+    return discover_catalysts(reaction_key, num_cands)
 
 # Import our modules
 from modules.molecule_validator import process_molecule_input
