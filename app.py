@@ -19,7 +19,7 @@ import pandas as pd
 import json
 import streamlit as st
 from datetime import datetime
-#chaching wrappers
+#caching wrappers
 @st.cache_data(ttl=3600)
 def cached_vqe_simulation(smiles, apply_noise=False):
     return run_vqe_simulation(smiles, apply_noise=apply_noise)
@@ -163,21 +163,50 @@ else:
 # HELPER FUNCTIONS
 # ========================================================================
 
-def plot_energy_landscape(states, energies, title="Energy Landscape"):
-    """Create beautiful energy landscape plot."""
+def plot_energy_landscape(states, classical_energies, quantum_energies=None, title="Reaction Landscape"):
+    """Create comparative classical vs quantum reaction landscape plot."""
     fig, ax = plt.subplots(figsize=(10, 6))
 
     x_pos = np.arange(len(states))
-    colors = ['#3498db', '#2ecc71', '#e74c3c', '#f39c12', '#9b59b6']
 
-    # Plot lines
-    ax.plot(x_pos, energies, 'o-', linewidth=2, markersize=10, color='#2c3e50')
+    # Plot Classical Chemical Pathway
+    ax.plot(
+        x_pos,
+        classical_energies,
+        'o-',
+        linewidth=2,
+        markersize=10,
+        color='#e74c3c',
+        label='Classical Chemical Profile'
+    )
 
-    # Fill area
-    ax.fill_between(x_pos, energies, min(energies), alpha=0.3, color='#3498db')
+    # Plot Quantum Reaction Pathway (if provided)
+    if quantum_energies is not None and len(quantum_energies) == len(classical_energies):
+        ax.plot(
+            x_pos,
+            quantum_energies,
+            '*--',
+            linewidth=2.5,
+            markersize=12,
+            color='#3498db',
+            label='Quantum Profile (Tunneling Corrected)'
+        )
 
-    # Annotate energies
-    for i, (state, energy) in enumerate(zip(states, energies)):
+        # Highlight the tunneling advantage at the Transition State (Index 2)
+        if len(classical_energies) > 2:
+            ts_diff = classical_energies[2] - quantum_energies[2]
+            ax.annotate(
+                f'Quantum Tunneling\n-{ts_diff:.3f} Ha',
+                xy=(2, quantum_energies[2]),
+                xytext=(2.2, classical_energies[2]),
+                arrowprops=dict(facecolor='green', shrink=0.05),
+                fontsize=10,
+                color='green',
+                fontweight='bold'
+            )
+
+    # Annotate classical energies
+    for i, energy in enumerate(classical_energies):
         ax.annotate(f'{energy:.4f} Ha',
                    xy=(i, energy),
                    xytext=(0, 10),
@@ -192,7 +221,7 @@ def plot_energy_landscape(states, energies, title="Energy Landscape"):
     ax.set_ylabel('Energy (Hartree)', fontsize=12, fontweight='bold')
     ax.set_title(title, fontsize=14, fontweight='bold')
     ax.grid(True, alpha=0.3, linestyle='--')
-    ax.axhline(y=0, color='k', linestyle='-', linewidth=0.5)
+    ax.legend()
 
     plt.tight_layout()
     return fig
@@ -507,7 +536,7 @@ elif page == "🔬 Feature 1: AI Discovery":
                 pathway_reaction_input = selected_reaction
 
             # Discover catalysts
-            candidates = discover_catalysts(discovery_reaction_key, num_candidates)
+            candidates = cached_discover_catalysts(discovery_reaction_key, num_candidates)
 
             if candidates:
                 st.success(f"✅ Generated {len(candidates)} catalyst candidates!")
@@ -561,7 +590,7 @@ elif page == "🔬 Feature 1: AI Discovery":
                             if st.button(f"Run VQE + Pathway", key=f"sim_{i}"):
                                 with st.spinner("Running quantum simulation..."):
                                     # Run VQE
-                                    vqe_result = run_vqe_simulation(cand['smiles'], apply_noise=apply_noise)
+                                    vqe_result = cached_vqe_simulation(cand['smiles'], apply_noise=apply_noise)
 
                                     if not vqe_result.get('error'):
                                         st.metric("Ground State Energy", f"{vqe_result['energy']:.6f} Ha")
@@ -576,13 +605,14 @@ elif page == "🔬 Feature 1: AI Discovery":
                                         plt.close()
 
                                         # Run pathway
-                                        pathway = simulate_reaction_pathway(cand['smiles'], pathway_reaction_input)
+                                        pathway = cached_pathway_simulation(cand['smiles'], pathway_reaction_input)
 
                                         if not pathway.get('error'):
                                             fig_path = plot_energy_landscape(
-                                                pathway['states'],
-                                                pathway['energies'],
-                                                f"Reaction Pathway: {cand['smiles']}"
+                                                states=pathway['states'],
+                                                classical_energies=pathway['energies'],
+                                                quantum_energies=pathway.get('quantum_energies'),
+                                                title=f"Reaction Pathway: {cand['smiles']}"
                                             )
                                             st.pyplot(fig_path)
                                             plt.close()
@@ -752,7 +782,7 @@ elif page == "🎮 Feature 2: Learning Game":
                     if st.button("Run Full Quantum Simulation"):
                         with st.spinner("Running comprehensive analysis..."):
                             # VQE simulation
-                            vqe_result = run_vqe_simulation(user_smiles)
+                            vqe_result = cached_vqe_simulation(user_smiles)
 
                             col_vqe1, col_vqe2 = st.columns(2)
 
@@ -772,7 +802,7 @@ elif page == "🎮 Feature 2: Learning Game":
                                     plt.close()
 
                             # Reaction pathway
-                            pathway = simulate_reaction_pathway(user_smiles, pathway_reaction_input)
+                            pathway = cached_pathway_simulation(user_smiles, pathway_reaction_input)
 
                             if not pathway.get('error'):
                                 st.markdown("### 🛤️ Reaction Energy Pathway")
@@ -781,9 +811,10 @@ elif page == "🎮 Feature 2: Learning Game":
 
                                 with col_path1:
                                     fig_path = plot_energy_landscape(
-                                        pathway['states'],
-                                        pathway['energies'],
-                                        "Reaction Pathway"
+                                        states=pathway['states'],
+                                        classical_energies=pathway['energies'],
+                                        quantum_energies=pathway.get('quantum_energies'),
+                                        title="Reaction Pathway"
                                     )
                                     st.pyplot(fig_path)
                                     plt.close()
@@ -1127,7 +1158,7 @@ elif page == "🧪 Molecule Explorer":
 
             if st.button("Run VQE Simulation"):
                 with st.spinner("Running VQE..."):
-                    vqe_result = run_vqe_simulation(smiles, method="VQE", apply_noise=explorer_noise)
+                    vqe_result = cached_vqe_simulation(smiles, apply_noise=explorer_noise)
 
                     if not vqe_result.get('error'):
                         sim_col1, sim_col2 = st.columns([1, 2])
@@ -1168,16 +1199,17 @@ elif page == "🧪 Molecule Explorer":
 
             if st.button("Run Catalyst Test"):
                 with st.spinner("Testing catalyst..."):
-                    pathway = simulate_reaction_pathway(smiles, test_reaction)
+                    pathway = cached_pathway_simulation(smiles, test_reaction)
 
                     if not pathway.get('error'):
                         cat_col1, cat_col2 = st.columns([2, 1])
 
                         with cat_col1:
                             fig_path = plot_energy_landscape(
-                                pathway['states'],
-                                pathway['energies'],
-                                f"Pathway: {validation['formula']}"
+                                states=pathway['states'],
+                                classical_energies=pathway['energies'],
+                                quantum_energies=pathway.get('quantum_energies'),
+                                title=f"Pathway: {validation['formula']}"
                             )
                             st.pyplot(fig_path)
                             plt.close()

@@ -188,7 +188,7 @@ class QuantumCatalystScorer:
             reaction_type: Type of reaction (e.g., "H2_O2", "CO2_reduction")
         """
         self.reaction_type = reaction_type
-        self.feature_map = ZZFeatureMap(feature_dimension=FEATURE_DIMENSION, reps=2)
+        self.feature_map = ZZFeatureMap(feature_dimension=FEATURE_DIMENSION, reps=1)
         self.trained = False
         self.training_data = self._get_training_data()
 
@@ -424,7 +424,7 @@ class VariationalCatalystClassifier:
     def __init__(self):
         self.num_features = FEATURE_DIMENSION
         self.feature_map = ZZFeatureMap(self.num_features, reps=1)
-        self.ansatz = RealAmplitudes(self.num_features, reps=3)
+        self.ansatz = RealAmplitudes(self.num_features, reps=1)
         self.trained = False
 
     def train(self, X: np.ndarray, y: np.ndarray):

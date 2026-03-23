@@ -17,7 +17,7 @@ Features:
 import numpy as np
 import importlib.util
 from qiskit_algorithms import VQE
-from qiskit_algorithms.optimizers import SLSQP, COBYLA
+from qiskit_algorithms.optimizers import SLSQP, SPSA
 from qiskit.primitives import StatevectorEstimator
 from qiskit.circuit.library import RealAmplitudes, EfficientSU2
 from qiskit.quantum_info import SparsePauliOp
@@ -181,7 +181,7 @@ def run_vqe_simulation(smiles: str, method: str = "VQE", apply_noise: bool = Fal
 
     Args:
         smiles: Canonical SMILES string of the molecule
-        method: Simulation method ("VQE", "VQE-COBYLA", or "HF")
+        method: Simulation method ("VQE", "VQE-SPSA", or "HF")
 
     Returns:
         Dictionary containing:
@@ -269,8 +269,8 @@ def run_vqe_simulation(smiles: str, method: str = "VQE", apply_noise: bool = Fal
             ansatz = EfficientSU2(num_qubits=num_qubits, reps=2)
 
         # Choose optimizer
-        if method == "VQE-COBYLA":
-            optimizer = COBYLA(maxiter=100)
+        if method in ("VQE-SPSA", "VQE-COBYLA"):
+            optimizer = SPSA(maxiter=50)
         else:
             optimizer = SLSQP(maxiter=100)
 
