@@ -40,49 +40,6 @@ except Exception:
     HAS_QISKIT_NATURE_DYNAMIC = False
 
 
-def _build_approximate_hamiltonian(smiles: str):
-    """
-    Build a lightweight approximate Hamiltonian for molecules not in the static DB.
-
-    This fallback is intended for exploratory discovery workflows when an exact
-    pre-computed Hamiltonian is unavailable.
-    """
-    mol = Chem.MolFromSmiles(smiles)
-    if mol is None:
-        return None
-
-    heavy_atoms = max(1, mol.GetNumHeavyAtoms())
-    num_qubits = min(6, max(2, 2 * ((heavy_atoms + 1) // 2)))
-    atom_z_sum = sum(atom.GetAtomicNum() for atom in mol.GetAtoms())
-
-    base_energy = -0.5 * float(atom_z_sum)
-    identity = "I" * num_qubits
-
-    pauli_terms = [(identity, base_energy)]
-
-    for i in range(num_qubits):
-        z_label = ["I"] * num_qubits
-        z_label[i] = "Z"
-        z_coeff = (0.12 + 0.03 * i) * (-1 if i % 2 else 1)
-        pauli_terms.append(("".join(z_label), z_coeff))
-
-    for i in range(num_qubits - 1):
-        zz_label = ["I"] * num_qubits
-        zz_label[i] = "Z"
-        zz_label[i + 1] = "Z"
-        pauli_terms.append(("".join(zz_label), -0.06 / (i + 1)))
-
-        xx_label = ["I"] * num_qubits
-        xx_label[i] = "X"
-        xx_label[i + 1] = "X"
-        pauli_terms.append(("".join(xx_label), 0.04 / (i + 1)))
-
-    hamiltonian = SparsePauliOp.from_list(pauli_terms)
-    reference_energy = base_energy * 0.95
-
-    return hamiltonian, 0.0, reference_energy, num_qubits
-
-
 def _build_pyscf_atom_string(smiles: str) -> Optional[str]:
     """Build a PySCF-compatible atom string from RDKit 3D geometry."""
     mol = generate_3d_molecule(smiles)
@@ -107,9 +64,8 @@ def _select_active_space(num_electrons: int, num_spatial_orbitals: int) -> Tuple
     active_orbitals = max(2, min(6, num_spatial_orbitals))
     active_electrons = max(2, min(6, num_electrons))
 
-    # Keep even-electron active spaces for spin-restricted stability.
-    if active_electrons % 2 != 0:
-        active_electrons = active_electrons - 1 if active_electrons > 2 else active_electrons + 1
+    if num_electrons % 2 != 0:
+        raise ValueError("Warning: Open-shell radicals (odd electrons) are not currently supported by this VQE configuration.")
 
     active_electrons = max(2, min(active_electrons, num_electrons))
 
@@ -222,21 +178,19 @@ def run_vqe_simulation(smiles: str, method: str = "VQE", apply_noise: bool = Fal
             hamiltonian_source = "database"
             generation_mode = "Static Database"
         else:
-            approx = _build_approximate_hamiltonian(smiles)
-            if approx is None:
-                return {
-                    "error": f"Invalid molecule input: '{smiles}'",
-                    "energy": 0,
-                    "convergence": [0],
-                    "iterations": 0,
-                    "num_qubits": 0,
-                    "method": method,
-                    "hamiltonian_source": "none",
-                    "generation_mode": "Static Database",
-                    "active_electrons": 0,
-                    "frozen_orbitals": 0,
-                    "noise_model": noise_model,
-                }
+            return {
+                "error": "Molecule requires deep d-orbital compilation. PySCF dynamic backend is currently offline.",
+                "energy": 0,
+                "convergence": [0],
+                "iterations": 0,
+                "num_qubits": 0,
+                "method": method,
+                "hamiltonian_source": "none",
+                "generation_mode": "Static Database",
+                "active_electrons": 0,
+                "frozen_orbitals": 0,
+                "noise_model": noise_model,
+            }
 
             hamiltonian, _, reference_energy, num_qubits = approx
             db.add_custom_hamiltonian(smiles, hamiltonian, 0.0, reference_energy, num_qubits)
