@@ -580,6 +580,12 @@ elif page == "🔬 Feature 1: AI Discovery":
                             st.write(f"- **Classification:** {cand['classification']}")
                             st.write(f"- **Feedback:** {cand['feedback']}")
 
+                            # 3D molecular visualization
+                            mol_3d = generate_3d_molecule(cand['smiles'])
+                            if mol_3d:
+                                st.markdown("**3D Structure:**")
+                                show_molecule_3d(mol_3d)
+
                         with col_b:
                             st.markdown("**Run Full Simulation:**")
                             apply_noise = st.toggle(
@@ -947,7 +953,11 @@ elif page == "📊 Quantum vs Classical":
 
                         st.metric(
                             label="Electron Correlation Energy Captured",
-                            value=f"{correlation_energy:.4f} Ha"
+                            value=f"{correlation_energy:.4f} Ha",
+                            delta=f"{comparison['vs_hf']['percent_improvement']:.4f}% vs HF",
+                            # Correlation energy is negative; a more negative value means more
+                            # correlation captured, which is an improvement (green arrow).
+                            delta_color="normal" if correlation_energy < 0 else "inverse"
                         )
                         st.info(
                             "Hartree-Fock (Classical) ignores electron-electron correlation. "
@@ -1009,18 +1019,24 @@ elif page == "📊 Quantum vs Classical":
                         with col1:
                             st.markdown("#### Quantum ML (QSVM)")
                             qsvm = ml_comp['quantum_ml']
-                            st.metric("Score", f"{qsvm['score']:.2f}/100")
+                            avg_score = ml_comp['comparison']['avg_classical_score']
+                            advantage = ml_comp['comparison']['quantum_advantage']
+                            st.metric(
+                                "Score",
+                                f"{qsvm['score']:.2f}/100",
+                                delta=f"{advantage:+.2f} vs Classical",
+                                delta_color="normal"
+                            )
                             st.metric("Classification", qsvm['classification'].upper())
                             st.metric("Confidence", f"{qsvm['confidence']:.1f}%")
                             st.caption(qsvm['method'])
 
                         with col2:
                             st.markdown("#### Classical ML (Average)")
-                            avg_score = ml_comp['comparison']['avg_classical_score']
+                            classical = ml_comp['classical_ml']
                             st.metric("Average Score", f"{avg_score:.2f}/100")
 
                             st.markdown("**Individual Methods:**")
-                            classical = ml_comp['classical_ml']
                             st.write(f"- RF: {classical['random_forest']['score']:.2f}")
                             st.write(f"- SVM: {classical['svm']['score']:.2f}")
                             st.write(f"- GB: {classical['gradient_boosting']['score']:.2f}")
@@ -1037,10 +1053,16 @@ elif page == "📊 Quantum vs Classical":
                         st.pyplot(fig_ml)
                         plt.close()
 
-                        # Quantum ML advantage
-                        advantage = ml_comp['comparison']['quantum_advantage']
+                        # Quantum ML advantage summary metric
+                        st.markdown("#### 🎯 Quantum ML Advantage")
+                        st.metric(
+                            label="Quantum Advantage (QSVM vs Classical Avg)",
+                            value=f"{advantage:.2f} pts",
+                            delta=f"{advantage:+.2f} pts",
+                            delta_color="normal" if advantage > 0 else "inverse"
+                        )
                         if advantage > 5:
-                            st.success(f"🎯 **Quantum ML Advantage: {advantage:.2f} points!**")
+                            st.success(f"🏆 **Quantum ML Advantage Demonstrated: {advantage:.2f} points!**")
                         else:
                             st.info(f"Methods are comparable (difference: {advantage:.2f} points)")
 

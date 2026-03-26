@@ -112,19 +112,19 @@ def _infer_reaction_type(reactants: List[str], products: List[str]) -> str:
     return "reduction"
 
 
-def _parse_reaction_term(term: str) -> Tuple[int, str]:
-    """Parse a stoichiometric reaction term (e.g., '3H2' or '2 H2O')."""
+def _parse_reaction_term(term: str) -> Tuple[float, str]:
+    """Parse a stoichiometric reaction term (e.g., '3H2', '0.5O2', or '2 H2O')."""
     cleaned = term.strip()
     if not cleaned:
         raise ValueError("Empty reaction term")
 
     match = re.match(r"^\s*([\d\.]+)\s*([A-Za-z0-9\[\]\(\)=#\+\-]+)\s*$", cleaned)
     if match:
-        coeff = int(match.group(1))
+        coeff = float(match.group(1))
         species = match.group(2)
         return coeff, species
 
-    return 1, cleaned
+    return 1.0, cleaned
 
 
 def _heuristic_species_energy(smiles: str) -> float:
@@ -183,6 +183,9 @@ def parse_dynamic_reaction(equation: str) -> Dict:
 
     reactants: List[str] = []
     products: List[str] = []
+    # Weighted lists store (coefficient, smiles) to support fractional stoichiometry.
+    reactants_weighted: List[Tuple[float, str]] = []
+    products_weighted: List[Tuple[float, str]] = []
 
     try:
         for term in left_terms:
@@ -190,24 +193,28 @@ def parse_dynamic_reaction(equation: str) -> Dict:
             validated = process_molecule_input(species, max_atoms=20)
             if not validated.get("valid"):
                 return {"error": f"Invalid reactant '{species}': {validated.get('error', 'unknown error')}"}
-            reactants.extend([validated["smiles"]] * coeff)
+            reactants.append(validated["smiles"])
+            reactants_weighted.append((coeff, validated["smiles"]))
 
         for term in right_terms:
             coeff, species = _parse_reaction_term(term)
             validated = process_molecule_input(species, max_atoms=20)
             if not validated.get("valid"):
                 return {"error": f"Invalid product '{species}': {validated.get('error', 'unknown error')}"}
-            products.extend([validated["smiles"]] * coeff)
+            products.append(validated["smiles"])
+            products_weighted.append((coeff, validated["smiles"]))
     except Exception as exc:
         return {"error": f"Failed to parse reaction equation: {exc}"}
 
     # Fast baseline enthalpy estimate using known energies + HF + heuristic fallback.
+    # Multiply each species energy by its stoichiometric coefficient to support
+    # fractional coefficients (e.g. 0.5 O2) without duplicating SMILES strings.
     reactant_e = 0.0
     product_e = 0.0
-    for s in reactants:
-        reactant_e += _estimate_species_energy(s)
-    for s in products:
-        product_e += _estimate_species_energy(s)
+    for coeff, s in reactants_weighted:
+        reactant_e += coeff * _estimate_species_energy(s)
+    for coeff, s in products_weighted:
+        product_e += coeff * _estimate_species_energy(s)
 
     reaction_enthalpy = float(product_e - reactant_e)
 
