@@ -112,7 +112,7 @@ def _infer_reaction_type(reactants: List[str], products: List[str]) -> str:
     return "reduction"
 
 
-def _parse_reaction_term(term: str) -> Tuple[int, str]:
+def _parse_reaction_term(term: str) -> Tuple[float, str]:
     """Parse a stoichiometric reaction term (e.g., '3H2' or '2 H2O')."""
     cleaned = term.strip()
     if not cleaned:
@@ -120,11 +120,12 @@ def _parse_reaction_term(term: str) -> Tuple[int, str]:
 
     match = re.match(r"^\s*([\d\.]+)\s*([A-Za-z0-9\[\]\(\)=#\+\-]+)\s*$", cleaned)
     if match:
-        coeff = int(match.group(1))
+        coeff_str = match.group(1)
+        coeff = float(coeff_str) if '.' in coeff_str else int(coeff_str)
         species = match.group(2)
         return coeff, species
 
-    return 1, cleaned
+    return 1.0, cleaned
 
 
 def _heuristic_species_energy(smiles: str) -> float:
@@ -190,14 +191,14 @@ def parse_dynamic_reaction(equation: str) -> Dict:
             validated = process_molecule_input(species, max_atoms=20)
             if not validated.get("valid"):
                 return {"error": f"Invalid reactant '{species}': {validated.get('error', 'unknown error')}"}
-            reactants.extend([validated["smiles"]] * coeff)
+            reactants.extend([validated["smiles"]] * int(math.ceil(coeff)))
 
         for term in right_terms:
             coeff, species = _parse_reaction_term(term)
             validated = process_molecule_input(species, max_atoms=20)
             if not validated.get("valid"):
                 return {"error": f"Invalid product '{species}': {validated.get('error', 'unknown error')}"}
-            products.extend([validated["smiles"]] * coeff)
+            products.extend([validated["smiles"]] * int(math.ceil(coeff)))
     except Exception as exc:
         return {"error": f"Failed to parse reaction equation: {exc}"}
 
