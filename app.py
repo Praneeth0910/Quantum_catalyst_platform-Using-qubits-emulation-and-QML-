@@ -4,7 +4,7 @@ Quantum Catalyst Discovery Platform - Main Application
 
 A comprehensive platform for quantum-powered catalyst discovery using:
 - Real VQE simulations
-- Quantum Machine Learning (QSVM, VQC, QGAN)
+- Quantum Machine Learning (QSVM, Rule-Based Chemical Classifier, Stochastic Quantum Latent-Space Generator)
 - Classical algorithm comparisons
 - Interactive educational tools
 
@@ -360,8 +360,8 @@ if page == "🏠 Home":
     with col1:
         st.markdown("""
         #### 🔬 Feature 1: AI-Powered Discovery
-        - **QGAN**: Generate novel catalyst candidates
-        - **VQC**: Classify catalyst effectiveness
+        - **Stochastic Quantum Latent-Space Generator**: Generate novel catalyst candidates
+        - **Rule-Based Chemical Classifier**: Classify catalyst effectiveness
         - **VQE**: Validate with quantum simulations
 
         Perfect for researchers discovering new materials!
@@ -398,7 +398,7 @@ if page == "🏠 Home":
 
     with cap_col2:
         st.metric("Quantum Algorithms", "4+")
-        st.caption("VQE, QSVM, VQC, QGAN")
+        st.caption("VQE, QSVM, Rule-Based Chemical Classifier, Stochastic Quantum Latent-Space Generator")
 
     with cap_col3:
         st.metric("Classical Baselines", "6+")
@@ -413,7 +413,7 @@ if page == "🏠 Home":
 
         1. **AI Discovery Mode**:
            - Select a target reaction
-           - Let the QGAN generate catalyst candidates
+           - Let the Stochastic Quantum Latent-Space Generator generate catalyst candidates
            - Review quantum simulation results
            - Compare with classical methods
 
@@ -473,7 +473,7 @@ elif page == "🔬 Feature 1: AI Discovery":
     st.markdown("""
     ### Discover Novel Catalysts with Quantum AI
 
-    This feature uses **QGAN** to generate catalyst candidates, **VQC** to classify them,
+    This feature uses **Stochastic Quantum Latent-Space Generator** to generate catalyst candidates, **Rule-Based Chemical Classifier** to classify them,
     and **VQE** to validate their effectiveness through quantum simulations.
     """)
 
@@ -772,7 +772,7 @@ elif page == "🎮 Feature 2: Learning Game":
                     st.markdown("### 💬 Feedback")
                     st.info(scoring_result['qsvm_feedback'])
 
-                    # VQC Category
+                    # Rule-Based Chemical Classifier Category
                     st.markdown(f"**Catalyst Category:** {scoring_result['vqc_category']}")
 
                     # Run full analysis
