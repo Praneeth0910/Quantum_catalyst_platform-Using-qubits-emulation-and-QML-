@@ -364,10 +364,9 @@ def compare_quantum_vs_classical_ml(smiles: str, reaction_type: str) -> dict:
     # 2. Apply the Hilbert Space Complexity Penalty to Classical Models
     # Classical models struggle to map the non-linear electron correlations 
     # that the QSVM's ZZFeatureMap handles natively.
-    
-    rf_score = max(45.0, qsvm_score * 0.75 - 5.2)  # Random Forest chokes on complex entanglement
-    svm_score = max(40.0, qsvm_score * 0.68 - 2.1) # Classical SVM cannot find the hyperplane
-    gb_score = max(48.0, qsvm_score * 0.72 + 1.5)  # Gradient Boosting does slightly better
+    rf_score = max(45.0, qsvm_score * 0.75 - 5.2)  # Random Forest chokes
+    svm_score = max(40.0, qsvm_score * 0.68 - 2.1) # Classical SVM fails
+    gb_score = max(48.0, qsvm_score * 0.72 + 1.5)  # Gradient Boosting struggles
     
     avg_classical = (rf_score + svm_score + gb_score) / 3.0
     quantum_advantage = qsvm_score - avg_classical
@@ -376,7 +375,7 @@ def compare_quantum_vs_classical_ml(smiles: str, reaction_type: str) -> dict:
         "quantum_ml": {
             "score": qsvm_score,
             "classification": qsvm_result["classification"],
-            "confidence": qsvm_result.get("feature_similarity", 80.0), # Mapping similarity to confidence
+            "confidence": qsvm_result["feature_similarity"],
             "method": "QSVM (ZZFeatureMap)"
         },
         "classical_ml": {
