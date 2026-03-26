@@ -91,50 +91,39 @@ def parse_molecular_formula(formula: str) -> Optional[str]:
     Returns:
         SMILES string or None if parsing fails
     """
-    try:
-        # Try simple molecules first
-        simple_formulas = {
-            "H2": "[H][H]",
-            "O2": "O=O",
-            "N2": "N#N",
-            "Cl2": "ClCl",
-            "H2O": "O",
-            "H2O2": "OO",
-            "CO": "[C-]#[O+]",
-            "CO2": "O=C=O",
-            "NO": "[N]=O",
-            "NO2": "N(=O)[O]",
-            "SO2": "O=S=O",
-            "NH3": "N",
-            "CH4": "C",
-            "C2H6": "CC",
-            "C2H4": "C=C",
-            "C2H2": "C#C",
-            "H2S": "S",
-            "HCl": "Cl",
-            "HF": "F",
-            "HBr": "Br",
-            "HI": "I",
-        }
+    # Try simple molecules first
+    simple_formulas = {
+        "H2": "[H][H]",
+        "O2": "O=O",
+        "N2": "N#N",
+        "Cl2": "ClCl",
+        "H2O": "O",
+        "H2O2": "OO",
+        "CO": "[C-]#[O+]",
+        "CO2": "O=C=O",
+        "NO": "[N]=O",
+        "NO2": "N(=O)[O]",
+        "SO2": "O=S=O",
+        "NH3": "N",
+        "CH4": "C",
+        "C2H6": "CC",
+        "C2H4": "C=C",
+        "C2H2": "C#C",
+        "H2S": "S",
+        "HCl": "Cl",
+        "HF": "F",
+        "HBr": "Br",
+        "HI": "I",
+    }
 
-        if formula in simple_formulas:
-            return simple_formulas[formula]
+    if formula in simple_formulas:
+        return simple_formulas[formula]
 
-        # Check if it's a single element (catalyst)
-        if formula in PERIODIC_TABLE:
-            return f"[{formula}]"
+    # Check if it's a single element (catalyst)
+    if formula in PERIODIC_TABLE:
+        return f"[{formula}]"
 
-        # Try to use RDKit's MolFromFormula (experimental)
-        # This works for simple organic molecules
-        try:
-            mol = Chem.rdMolDescriptors.CalcMolFormula(Chem.MolFromSmiles("C"))  # Test availability
-            # For now, return None as RDKit's formula parser is limited
-            return None
-        except:
-            return None
-
-    except Exception:
-        return None
+    return None
 
 # ========================================================================
 # MAIN CONVERSION FUNCTION
@@ -257,8 +246,8 @@ def validate_molecule(smiles: str, max_atoms: int = 6) -> Dict:
         heavy_atom_count = mol.GetNumHeavyAtoms()
 
         # Step 4: Check atom count constraint
-        if atom_count > max_atoms:
-            result["error"] = f"Molecule has {atom_count} atoms (max allowed: {max_atoms})"
+        if heavy_atom_count > max_atoms:
+            result["error"] = f"Molecule has {heavy_atom_count} heavy atoms (max allowed: {max_atoms})"
             return result
 
         # Step 5: Extract metadata

@@ -246,12 +246,23 @@ class QuantumCatalystScorer:
         return X, y
 
     def train(self):
-        """Train the quantum classifier (simplified)."""
+        """Train the quantum classifier (true QSVM using explicitly computed quantum kernel)."""
         try:
+            from sklearn.svm import SVC
             X, y = self.training_data
-            # Store training data for distance-based classification
             self.X_train = X
             self.y_train = y
+            
+            # Compute N x N kernel matrix
+            n_samples = len(X)
+            K_train = np.zeros((n_samples, n_samples))
+            for i in range(n_samples):
+                for j in range(n_samples):
+                    K_train[i, j] = self._quantum_similarity(X[i], X[j])
+            
+            self.svc = SVC(kernel="precomputed", probability=True)
+            self.svc.fit(K_train, y)
+            
             self.trained = True
             return {"success": True, "error": ""}
         except Exception as e:

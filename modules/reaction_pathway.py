@@ -118,7 +118,7 @@ def _parse_reaction_term(term: str) -> Tuple[int, str]:
     if not cleaned:
         raise ValueError("Empty reaction term")
 
-    match = re.match(r"^\s*(\d+)\s*([A-Za-z0-9\[\]\(\)=#\+\-]+)\s*$", cleaned)
+    match = re.match(r"^\s*([\d\.]+)\s*([A-Za-z0-9\[\]\(\)=#\+\-]+)\s*$", cleaned)
     if match:
         coeff = int(match.group(1))
         species = match.group(2)
