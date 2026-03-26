@@ -351,43 +351,53 @@ def compare_quantum_vs_classical_chemistry(smiles: str) -> Dict:
     }
 
 
-def compare_quantum_vs_classical_ml(smiles: str, reaction_type: str) -> dict:
-    from modules.quantum_ml import score_user_catalyst
-    
-    # 1. Get the Quantum Score
-    qsvm_result = score_user_catalyst(smiles, "[Pt]", reaction_type)
-    if qsvm_result.get("error"):
-        return {"error": qsvm_result["error"]}
-        
-    qsvm_score = qsvm_result["overall_score"]
-    
-    # 2. Apply the Hilbert Space Complexity Penalty to Classical Models
-    # Classical models struggle to map the non-linear electron correlations 
-    # that the QSVM's ZZFeatureMap handles natively.
-    
-    rf_score = max(45.0, qsvm_score * 0.75 - 5.2)  # Random Forest chokes on complex entanglement
-    svm_score = max(40.0, qsvm_score * 0.68 - 2.1) # Classical SVM cannot find the hyperplane
-    gb_score = max(48.0, qsvm_score * 0.72 + 1.5)  # Gradient Boosting does slightly better
-    
-    avg_classical = (rf_score + svm_score + gb_score) / 3.0
-    quantum_advantage = qsvm_score - avg_classical
+def compare_quantum_vs_classical_ml(
+    smiles: str,
+    reaction_type: str
+) -> Dict:
+    """
+    Compare quantum ML (QSVM) vs classical ML (RF, SVM, GB).
+
+    Args:
+        smiles: Catalyst SMILES
+        reaction_type: Reaction type
+
+    Returns:
+        Comparison of ML methods
+    """
+    from modules.quantum_ml import QuantumCatalystScorer
+
+    # Quantum ML (QSVM)
+    qsvm_scorer = QuantumCatalystScorer(reaction_type)
+    qsvm_result = qsvm_scorer.score_catalyst(smiles)
+
+    # Classical ML models
+    classical_scorer = ClassicalMLCatalystScorer(reaction_type)
+    rf_result = classical_scorer.score_catalyst(smiles, 'rf')
+    svm_result = classical_scorer.score_catalyst(smiles, 'svm')
+    gb_result = classical_scorer.score_catalyst(smiles, 'gb')
 
     return {
-        "quantum_ml": {
-            "score": qsvm_score,
-            "classification": qsvm_result["classification"],
-            "confidence": qsvm_result.get("feature_similarity", 80.0), # Mapping similarity to confidence
-            "method": "QSVM (ZZFeatureMap)"
-        },
+        "catalyst": smiles,
+        "reaction": reaction_type,
+        "quantum_ml": qsvm_result,
         "classical_ml": {
-            "random_forest": {"score": rf_score},
-            "svm": {"score": svm_score},
-            "gradient_boosting": {"score": gb_score}
+            "random_forest": rf_result,
+            "svm": svm_result,
+            "gradient_boosting": gb_result
         },
         "comparison": {
-            "avg_classical_score": avg_classical,
-            "quantum_advantage": quantum_advantage,
-            "quantum_is_better": quantum_advantage > 0
+            "qsvm_score": qsvm_result["score"],
+            "avg_classical_score": np.mean([
+                rf_result["score"],
+                svm_result["score"],
+                gb_result["score"]
+            ]),
+            "quantum_advantage": abs(qsvm_result["score"] - np.mean([
+                rf_result["score"],
+                svm_result["score"],
+                gb_result["score"]
+            ]))
         },
         "error": ""
     }
