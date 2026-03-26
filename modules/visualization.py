@@ -13,14 +13,30 @@ def mol_to_xyz(mol):
         xyz += f"{atom.GetSymbol()} {pos.x:.4f} {pos.y:.4f} {pos.z:.4f}\n"
     return xyz
 
-def show_molecule_3d(mol):
+def show_molecule_3d(mol, width: int = 600, height: int = 450, style: str = "stick"):
     """
-    Returns a Py3Dmol viewer for the molecule.
+    Renders an interactive, draggable 3D model of the molecule using py3Dmol.
+
+    Args:
+        mol: RDKit molecule with a 3D conformer.
+        width: Viewer width in pixels.
+        height: Viewer height in pixels.
+        style: Rendering style — "stick", "sphere", or "ballstick".
     """
     xyz = mol_to_xyz(mol)
-    viewer = py3Dmol.view(width=500, height=400)
+    viewer = py3Dmol.view(width=width, height=height)
     viewer.addModel(xyz, "xyz")
-    viewer.setStyle({"stick": {}})
+
+    if style == "sphere":
+        viewer.setStyle({"sphere": {"scale": 0.3, "colorscheme": "Jmol"}})
+    elif style == "ballstick":
+        viewer.setStyle({"stick": {"radius": 0.15, "colorscheme": "Jmol"}, "sphere": {"scale": 0.25, "colorscheme": "Jmol"}})
+    else:
+        viewer.setStyle({"stick": {"radius": 0.15, "colorscheme": "Jmol"}})
+
+    viewer.setBackgroundColor("#0e1117")  # Match Streamlit dark background
     viewer.zoomTo()
+    viewer.zoom(0.9)
+
     html = viewer._make_html()
-    components.html(html, height=400)
+    components.html(html, height=height, scrolling=False)
