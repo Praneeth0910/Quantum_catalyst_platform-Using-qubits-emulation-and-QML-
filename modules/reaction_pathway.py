@@ -374,7 +374,7 @@ class ReactionPathwayCalculator:
             states = [
                 "Reactants (gas phase)",
                 "Reactants adsorbed on catalyst",
-                "Transition State",
+                "Transition State (BEP Semi-Empirical Estimate)",
                 "Products on catalyst",
                 "Products (desorbed)"
             ]
