@@ -1005,25 +1005,56 @@ elif page == "📊 Quantum vs Classical":
 
                     if not ml_comp.get('error'):
                         col1, col2 = st.columns(2)
+                        qsvm = ml_comp['quantum_ml']
+                        classical = ml_comp['classical_ml']
+                        avg_score = ml_comp['comparison']['avg_classical_score']
+                        advantage = ml_comp['comparison']['quantum_advantage']
 
                         with col1:
                             st.markdown("#### Quantum ML (QSVM)")
-                            qsvm = ml_comp['quantum_ml']
-                            st.metric("Score", f"{qsvm['score']:.2f}/100")
+                            st.metric(
+                                "Score",
+                                f"{qsvm['score']:.2f}/100",
+                                delta=f"{advantage:+.2f} vs Classical",
+                                delta_color="normal",
+                            )
                             st.metric("Classification", qsvm['classification'].upper())
-                            st.metric("Confidence", f"{qsvm['confidence']:.1f}%")
+                            st.metric(
+                                "Confidence",
+                                f"{qsvm['confidence']:.1f}%",
+                                delta=f"{qsvm['confidence'] - avg_score:+.1f}%",
+                                delta_color="normal",
+                            )
                             st.caption(qsvm['method'])
 
                         with col2:
                             st.markdown("#### Classical ML (Average)")
-                            avg_score = ml_comp['comparison']['avg_classical_score']
-                            st.metric("Average Score", f"{avg_score:.2f}/100")
+                            st.metric(
+                                "Average Score",
+                                f"{avg_score:.2f}/100",
+                                delta=f"{-advantage:+.2f} vs QSVM",
+                                delta_color="inverse",
+                            )
 
                             st.markdown("**Individual Methods:**")
-                            classical = ml_comp['classical_ml']
-                            st.write(f"- RF: {classical['random_forest']['score']:.2f}")
-                            st.write(f"- SVM: {classical['svm']['score']:.2f}")
-                            st.write(f"- GB: {classical['gradient_boosting']['score']:.2f}")
+                            st.metric(
+                                "Random Forest",
+                                f"{classical['random_forest']['score']:.2f}",
+                                delta=f"{classical['random_forest']['score'] - qsvm['score']:+.2f} vs QSVM",
+                                delta_color="inverse",
+                            )
+                            st.metric(
+                                "SVM (Classical)",
+                                f"{classical['svm']['score']:.2f}",
+                                delta=f"{classical['svm']['score'] - qsvm['score']:+.2f} vs QSVM",
+                                delta_color="inverse",
+                            )
+                            st.metric(
+                                "Gradient Boosting",
+                                f"{classical['gradient_boosting']['score']:.2f}",
+                                delta=f"{classical['gradient_boosting']['score'] - qsvm['score']:+.2f} vs QSVM",
+                                delta_color="inverse",
+                            )
 
                         # ML Comparison visualization
                         st.markdown("#### Scoring Comparison")
@@ -1038,7 +1069,6 @@ elif page == "📊 Quantum vs Classical":
                         plt.close()
 
                         # Quantum ML advantage
-                        advantage = ml_comp['comparison']['quantum_advantage']
                         if advantage > 5:
                             st.success(f"🎯 **Quantum ML Advantage: {advantage:.2f} points!**")
                         else:
@@ -1137,13 +1167,20 @@ elif page == "🧪 Molecule Explorer":
             st.markdown("---")
             st.markdown("### 🔬 3D Structure")
 
+            viz_style = st.selectbox(
+                "Rendering Style",
+                ["stick", "ballstick", "sphere"],
+                index=0,
+                key="viz_style_explorer",
+            )
+
             try:
                 mol_3d = generate_3d_molecule(smiles)
                 if mol_3d:
-                    show_molecule_3d(mol_3d)
+                    show_molecule_3d(mol_3d, width=600, height=450, style=viz_style)
                 else:
                     st.warning("3D generation not available for this molecule")
-            except:
+            except Exception:
                 st.warning("3D visualization not available for this molecule")
 
             # Quantum Simulation
