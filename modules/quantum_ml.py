@@ -321,55 +321,42 @@ class QuantumCatalystScorer:
                     "error": reason
                 }
 
-            if not hasattr(self, "X_train") or not hasattr(self, "y_train"):
+            if not hasattr(self, "X_train") or not hasattr(self, "y_train") or not hasattr(self, "svc"):
                 return {
                     "score": 0,
                     "classification": "error",
                     "confidence": 0,
                     "feedback": "Model training data unavailable.",
-                    "method": "QSVM (Quantum Kernel)",
+                    "method": "QSVM (Quantum Kernel SVC)",
                     "error": "missing training state"
                 }
 
-            # Calculate similarities to training examples
-            good_indices = np.where(self.y_train == 1)[0]
-            poor_indices = np.where(self.y_train == -1)[0]
+            # Calculate 1 x N kernel vector
+            n_train = len(self.X_train)
+            K_test = np.zeros((1, n_train))
+            for j in range(n_train):
+                K_test[0, j] = self._quantum_similarity(features, self.X_train[j])
 
-            if len(good_indices) == 0 or len(poor_indices) == 0:
-                return {
-                    "score": 0,
-                    "classification": "error",
-                    "confidence": 0,
-                    "feedback": "Training data is incomplete for this reaction class.",
-                    "method": "QSVM (Quantum Kernel)",
-                    "error": "invalid class split"
-                }
-
-            # Average similarity to good catalysts
-            good_sim = np.mean([
-                self._quantum_similarity(features, self.X_train[i])
-                for i in good_indices
-            ])
-
-            # Average similarity to poor catalysts
-            poor_sim = np.mean([
-                self._quantum_similarity(features, self.X_train[i])
-                for i in poor_indices
-            ])
-
-            # Decision based on relative similarity
-            decision = good_sim - poor_sim
-            confidence = min(abs(decision) / 1.0, 1.0) * 100
-
-            # Map to score
-            if decision > 0:
-                prediction = 1
-                score = 70 + (confidence * 0.3)
-                classification = "good" if score < 85 else "excellent"
+            # Get predicted probabilities
+            probas = self.svc.predict_proba(K_test)[0]
+            # Probabilities array corresponds to self.svc.classes_
+            class_1_index = np.where(self.svc.classes_ == 1)[0][0]
+            prob_good = probas[class_1_index]
+            
+            # Map probability to score (0-100)
+            score = prob_good * 100
+            
+            # Prediction and classification
+            confidence = max(probas) * 100
+            
+            if score >= 85:
+                classification = "excellent"
+            elif score >= 70:
+                classification = "good"
+            elif score >= 30:
+                classification = "fair"
             else:
-                prediction = -1
-                score = 50 - (confidence * 0.5)
-                classification = "poor" if score < 30 else "fair"
+                classification = "poor"
 
             # Get catalyst properties for feedback
             props = get_catalyst_properties(smiles)
