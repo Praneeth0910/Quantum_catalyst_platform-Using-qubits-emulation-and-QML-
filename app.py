@@ -17,8 +17,9 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import json
-import streamlit as st
 from datetime import datetime
+from PIL import Image
+import os
 #caching wrappers
 @st.cache_data(ttl=3600)
 def cached_vqe_simulation(smiles, apply_noise=False):
@@ -68,44 +69,170 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Custom CSS for better visuals
+# Custom CSS for modern dark theme with glassmorphism
 st.markdown("""
 <style>
+    /* Root theme configuration */
+    :root {
+        --primary-bg: #0a0e27;
+        --secondary-bg: #0f1438;
+        --accent-cyan: #00d4ff;
+        --accent-purple: #a855f7;
+        --text-primary: #e8e8f0;
+        --text-secondary: #a8aac0;
+        --glass-bg: rgba(139, 89, 198, 0.08);
+        --border-color: rgba(255, 255, 255, 0.1);
+        --glow-color: rgba(0, 212, 255, 0.2);
+    }
+
+    /* Main container styling */
+    .main {
+        background: linear-gradient(135deg, #0a0e27 0%, #1a0a3d 100%);
+        color: var(--text-primary);
+    }
+
+    /* Metric cards - glassmorphic style */
+    .metric-card {
+        background: var(--glass-bg);
+        backdrop-filter: blur(8px);
+        border: 1px solid var(--border-color);
+        border-radius: 12px;
+        padding: 1.5rem;
+        box-shadow: 0 8px 32px rgba(0, 212, 255, 0.1);
+        border-left: 4px solid var(--accent-cyan);
+        margin: 1rem 0;
+        transition: all 0.3s ease;
+    }
+
+    .metric-card:hover {
+        border-left: 4px solid var(--accent-purple);
+        box-shadow: 0 12px 48px rgba(168, 85, 247, 0.15);
+    }
+
+    /* Success box */
+    .success-box {
+        background: rgba(34, 197, 94, 0.12);
+        backdrop-filter: blur(8px);
+        border: 1px solid rgba(34, 197, 94, 0.3);
+        border-radius: 12px;
+        padding: 1.5rem;
+        border-left: 4px solid #22c55e;
+        box-shadow: 0 8px 32px rgba(34, 197, 94, 0.1);
+        color: #86efac;
+    }
+
+    /* Warning box */
+    .warning-box {
+        background: rgba(245, 158, 11, 0.12);
+        backdrop-filter: blur(8px);
+        border: 1px solid rgba(245, 158, 11, 0.3);
+        border-radius: 12px;
+        padding: 1.5rem;
+        border-left: 4px solid #f59e0b;
+        box-shadow: 0 8px 32px rgba(245, 158, 11, 0.1);
+        color: #fcd34d;
+    }
+
+    /* Error box */
+    .error-box {
+        background: rgba(239, 68, 68, 0.12);
+        backdrop-filter: blur(8px);
+        border: 1px solid rgba(239, 68, 68, 0.3);
+        border-radius: 12px;
+        padding: 1.5rem;
+        border-left: 4px solid #ef4444;
+        box-shadow: 0 8px 32px rgba(239, 68, 68, 0.1);
+        color: #fca5a5;
+    }
+
+    /* Main header */
     .main-header {
         font-size: 3rem;
-        font-weight: bold;
-        color: #1f77b4;
+        font-weight: 900;
+        background: linear-gradient(135deg, var(--accent-cyan) 0%, var(--accent-purple) 100%);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        background-clip: text;
         text-align: center;
         margin-bottom: 2rem;
+        text-shadow: 0 0 30px rgba(0, 212, 255, 0.3);
+        letter-spacing: 0.5px;
     }
+
+    /* Sub header */
     .sub-header {
-        font-size: 1.5rem;
-        color: #2ca02c;
+        font-size: 1.75rem;
+        color: var(--accent-cyan);
         margin-top: 2rem;
+        margin-bottom: 1rem;
+        font-weight: 700;
+        border-bottom: 2px solid rgba(0, 212, 255, 0.3);
+        padding-bottom: 0.5rem;
     }
-    .metric-card {
-        background-color: #f0f2f6;
-        padding: 1rem;
-        border-radius: 0.5rem;
-        border-left: 4px solid #1f77b4;
+
+    /* Lab branding in sidebar */
+    .lab-branding {
+        text-align: center;
+        padding: 1.5rem 1rem;
+        margin-bottom: 2rem;
+        border-bottom: 1px solid var(--border-color);
     }
-    .success-box {
-        background-color: #d4edda;
-        padding: 1rem;
-        border-radius: 0.5rem;
-        border-left: 4px solid #28a745;
+
+    .lab-name {
+        font-size: 0.95rem;
+        font-weight: 700;
+        color: var(--accent-cyan);
+        margin-top: 0.75rem;
+        letter-spacing: 0.5px;
     }
-    .warning-box {
-        background-color: #fff3cd;
-        padding: 1rem;
-        border-radius: 0.5rem;
-        border-left: 4px solid #ffc107;
+
+    /* Footer styling */
+    .footer-container {
+        margin-top: 3rem;
+        padding-top: 2rem;
+        border-top: 1px solid var(--border-color);
+        text-align: center;
     }
-    .error-box {
-        background-color: #f8d7da;
-        padding: 1rem;
-        border-radius: 0.5rem;
-        border-left: 4px solid #dc3545;
+
+    .footer-text {
+        color: var(--text-secondary);
+        font-size: 0.9rem;
+        line-height: 1.6;
+    }
+
+    .footer-name {
+        color: var(--accent-cyan);
+        font-weight: 600;
+        margin: 0.5rem 0;
+    }
+
+    .footer-subtitle {
+        color: var(--text-secondary);
+        font-size: 0.85rem;
+        margin-top: 0.25rem;
+    }
+
+    /* Enhanced spacing for sections */
+    .section-divider {
+        margin: 2.5rem 0;
+        border: none;
+        border-top: 1px solid var(--border-color);
+    }
+
+    /* Improve column spacing */
+    .space-large {
+        margin: 2rem 0;
+    }
+
+    /* Responsive adjustments */
+    @media (max-width: 768px) {
+        .main-header {
+            font-size: 2rem;
+        }
+
+        .sub-header {
+            font-size: 1.35rem;
+        }
     }
 </style>
 """, unsafe_allow_html=True)
@@ -128,6 +255,18 @@ if 'discovered_catalysts' not in st.session_state:
 # ========================================================================
 
 st.sidebar.title("⚛️ Quantum Catalyst Platform")
+
+# Display logo and lab branding
+try:
+    logo_path = "logo-singularity.png"
+    if os.path.exists(logo_path):
+        st.sidebar.markdown('<div class="lab-branding">', unsafe_allow_html=True)
+        st.sidebar.image(logo_path, width=150, use_container_width=False)
+        st.sidebar.markdown('<div class="lab-name">The Singularity Advanced Research Lab</div>', unsafe_allow_html=True)
+        st.sidebar.markdown('</div>', unsafe_allow_html=True)
+except Exception as e:
+    st.sidebar.warning(f"Logo not found: {e}")
+
 st.sidebar.markdown("---")
 
 page = st.sidebar.radio(
@@ -1308,10 +1447,12 @@ elif page == "📈 Results & Export":
 # FOOTER
 # ========================================================================
 
+st.markdown('<div class="footer-container">', unsafe_allow_html=True)
 st.markdown("---")
 st.markdown("""
-<div style='text-align: center; color: gray;'>
-    <p><strong>Quantum Catalyst Discovery Platform</strong> | Built with Qiskit, RDKit, and Streamlit</p>
-    <p>Powered by Real Quantum Computing & Machine Learning</p>
+<div class="footer-text">
+    <div class="footer-name">Baratam Praneeth Gupta</div>
+    <div class="footer-subtitle">Member of Anu Tattva (Part of Singularity)</div>
 </div>
 """, unsafe_allow_html=True)
+st.markdown('</div>', unsafe_allow_html=True)
