@@ -112,19 +112,19 @@ def _infer_reaction_type(reactants: List[str], products: List[str]) -> str:
     return "reduction"
 
 
-def _parse_reaction_term(term: str) -> Tuple[int, str]:
-    """Parse a stoichiometric reaction term (e.g., '3H2' or '2 H2O')."""
+def _parse_reaction_term(term: str) -> Tuple[float, str]:
+    """Parse a stoichiometric reaction term (e.g., '3H2', '2 H2O', or '0.5O2')."""
     cleaned = term.strip()
     if not cleaned:
         raise ValueError("Empty reaction term")
 
     match = re.match(r"^\s*([\d\.]+)\s*([A-Za-z0-9\[\]\(\)=#\+\-]+)\s*$", cleaned)
     if match:
-        coeff = int(match.group(1))
+        coeff = float(match.group(1))
         species = match.group(2)
         return coeff, species
 
-    return 1, cleaned
+    return 1.0, cleaned
 
 
 def _heuristic_species_energy(smiles: str) -> float:
@@ -181,8 +181,9 @@ def parse_dynamic_reaction(equation: str) -> Dict:
     if not left_terms or not right_terms:
         return {"error": "Both reactant and product sides must contain at least one species."}
 
-    reactants: List[str] = []
-    products: List[str] = []
+    # Store (coefficient, smiles) pairs to support fractional stoichiometry.
+    reactant_terms: List[Tuple[float, str]] = []
+    product_terms: List[Tuple[float, str]] = []
 
     try:
         for term in left_terms:
@@ -190,24 +191,28 @@ def parse_dynamic_reaction(equation: str) -> Dict:
             validated = process_molecule_input(species, max_atoms=20)
             if not validated.get("valid"):
                 return {"error": f"Invalid reactant '{species}': {validated.get('error', 'unknown error')}"}
-            reactants.extend([validated["smiles"]] * coeff)
+            reactant_terms.append((coeff, validated["smiles"]))
 
         for term in right_terms:
             coeff, species = _parse_reaction_term(term)
             validated = process_molecule_input(species, max_atoms=20)
             if not validated.get("valid"):
                 return {"error": f"Invalid product '{species}': {validated.get('error', 'unknown error')}"}
-            products.extend([validated["smiles"]] * coeff)
+            product_terms.append((coeff, validated["smiles"]))
     except Exception as exc:
         return {"error": f"Failed to parse reaction equation: {exc}"}
 
+    # Flat SMILES lists — one entry per parsed term (not duplicated by coefficient).
+    # Used for reaction-type inference and VQE iteration; coefficients are stored
+    # separately in reactant_coefficients / product_coefficients.
+    reactants: List[str] = [s for _, s in reactant_terms]
+    products: List[str] = [s for _, s in product_terms]
+
     # Fast baseline enthalpy estimate using known energies + HF + heuristic fallback.
-    reactant_e = 0.0
-    product_e = 0.0
-    for s in reactants:
-        reactant_e += _estimate_species_energy(s)
-    for s in products:
-        product_e += _estimate_species_energy(s)
+    # Multiply each species energy by its stoichiometric coefficient to handle
+    # fractional coefficients (e.g., 0.5O2) without duplicating SMILES strings.
+    reactant_e = sum(coeff * _estimate_species_energy(s) for coeff, s in reactant_terms)
+    product_e = sum(coeff * _estimate_species_energy(s) for coeff, s in product_terms)
 
     reaction_enthalpy = float(product_e - reactant_e)
 
@@ -218,6 +223,8 @@ def parse_dynamic_reaction(equation: str) -> Dict:
         "equation": equation.strip(),
         "reactants": reactants,
         "products": products,
+        "reactant_coefficients": {s: c for c, s in reactant_terms},
+        "product_coefficients": {s: c for c, s in product_terms},
         "type": reaction_type,
         "ideal_catalysts": ["[Pt]", "[Fe]", "[Cu]"],
         "activation_energy_uncatalyzed": 2.8,
@@ -305,20 +312,27 @@ class ReactionPathwayCalculator:
             Dictionary with states, energies, and analysis
         """
         try:
+            # Retrieve stoichiometric coefficients if present (from parse_dynamic_reaction).
+            # For static REACTION_DATABASE entries these dicts are absent, so default to 1.
+            reactant_coeffs = self.reaction.get("reactant_coefficients", {})
+            product_coeffs = self.reaction.get("product_coefficients", {})
+
             # Step 1: Calculate molecular energies with VQE
             reactant_energies = []
             for reactant in self.reaction["reactants"]:
                 result = run_vqe_simulation(reactant, method="VQE")
                 if result.get("error"):
                     return {"error": f"VQE failed for {reactant}: {result['error']}"}
-                reactant_energies.append(result["energy"])
+                coeff = reactant_coeffs.get(reactant, 1.0)
+                reactant_energies.append(coeff * result["energy"])
 
             product_energies = []
             for product in self.reaction["products"]:
                 result = run_vqe_simulation(product, method="VQE")
                 if result.get("error"):
                     return {"error": f"VQE failed for {product}: {result['error']}"}
-                product_energies.append(result["energy"])
+                coeff = product_coeffs.get(product, 1.0)
+                product_energies.append(coeff * result["energy"])
 
             # Calculate catalyst energy
             catalyst_result = run_vqe_simulation(catalyst_smiles, method="VQE")
